@@ -424,12 +424,27 @@ def step_bin(step):
 
 
 def step_sort(step):
+    """여러 열을 기준으로 정렬한다. 방향은 열마다 따로 줄 수 있다.
+
+    ascending이 참/거짓 하나면 모든 열에 같은 방향을 쓴다(예전 저장본 호환).
+    목록이면 기준 열과 짝을 지어 쓰고, 모자라면 오름차순으로 채운다.
+    """
     name = step["table"]
     frame = get_table(name)
-    columns = [column for column in step["by"] if column in frame.columns]
-    if not columns:
+    raw_ascending = step.get("ascending", True)
+    pairs = []
+    for index, column in enumerate(step["by"]):
+        if column not in frame.columns:
+            continue
+        if isinstance(raw_ascending, list):
+            direction = bool(raw_ascending[index]) if index < len(raw_ascending) else True
+        else:
+            direction = bool(raw_ascending)
+        pairs.append((column, direction))
+    if not pairs:
         raise KernelError("정렬 기준 열을 선택하세요.")
-    ascending = bool(step.get("ascending", True))
+    columns = [column for column, _ in pairs]
+    ascending = [direction for _, direction in pairs]
     TABLES[name] = frame.sort_values(columns, ascending=ascending).reset_index(drop=True)
 
 

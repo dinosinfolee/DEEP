@@ -483,7 +483,7 @@ const STEP_SCHEMAS = {
       { key: 'by', type: 'columns', label: '기준 열', wide: true },
       { key: 'ascending', type: 'checkbox', label: '오름차순', default: true },
     ],
-    describe: (s) => `${(s.by || []).join(', ')} ${s.ascending ? '↑' : '↓'}`,
+    describe: (s) => (s.by || []).join(', '),
   },
   drop_rows: {
     label: '행 삭제', group: '행', hidden: true,
@@ -899,8 +899,8 @@ async function renderTable() {
     if (mark) inner.append(el('span', 'sort-mark', mark));
     cell.append(inner);
     cell.classList.add('sortable');
-    cell.title = '누르면 정렬 · 두 번 누르면 이름 고치기';
-    cell.onclick = () => cycleSort(state.activeTable, name);
+    cell.title = '누르면 정렬 · Shift를 누른 채로 누르면 기준 추가 · 두 번 누르면 이름 고치기';
+    cell.onclick = (event) => cycleSort(state.activeTable, name, event.shiftKey);
     cell.ondblclick = (event) => {
       event.preventDefault();
       startRename(cell, label, name);
@@ -1018,20 +1018,58 @@ function sortStepFor(name) {
   return state.steps.find((step) => step.op === 'sort' && step.table === name) || null;
 }
 
-function sortMark(name, column) {
-  const step = sortStepFor(name);
-  if (!step || (step.by || [])[0] !== column) return '';
-  return step.ascending ? '↑' : '↓';
+/* 예전 저장본은 ascending이 참/거짓 하나다. 기준 열 수에 맞춰 목록으로 편다. */
+function sortDirections(step, count) {
+  const raw = step.ascending;
+  if (Array.isArray(raw)) {
+    const list = raw.map(Boolean);
+    while (list.length < count) list.push(true);
+    return list.slice(0, count);
+  }
+  return Array.from({ length: count }, () => raw !== false);
 }
 
-/* 머리글을 누를 때마다 오름차순 → 내림차순 → 해제로 돈다. */
-async function cycleSort(name, column) {
+function sortMark(name, column) {
+  const step = sortStepFor(name);
+  if (!step) return '';
+  const by = step.by || [];
+  const at = by.indexOf(column);
+  if (at === -1) return '';
+  const arrow = sortDirections(step, by.length)[at] ? '↑' : '↓';
+  return by.length > 1 ? `${arrow}${at + 1}` : arrow;
+}
+
+/* 그냥 누르면 이 열 하나로 정렬하고, 다시 누르면 방향이 뒤집히고, 한 번 더 누르면 풀린다.
+   Shift를 누른 채로 누르면 기존 기준 뒤에 이 열을 덧붙인다(같은 식으로 뒤집고 뺀다). */
+async function cycleSort(name, column, additive) {
   const current = sortStepFor(name);
-  const same = current && (current.by || [])[0] === column;
-  const next = !same ? 'asc' : current.ascending ? 'desc' : null;
+  const by = current ? [...(current.by || [])] : [];
+  const dirs = current ? sortDirections(current, by.length) : [];
+  const at = by.indexOf(column);
+
+  if (additive && by.length) {
+    if (at === -1) {
+      by.push(column);
+      dirs.push(true);
+    } else if (dirs[at]) {
+      dirs[at] = false;
+    } else {
+      by.splice(at, 1);
+      dirs.splice(at, 1);
+    }
+  } else if (by.length === 1 && at === 0) {
+    if (dirs[0]) dirs[0] = false;
+    else { by.length = 0; dirs.length = 0; }
+  } else {
+    by.length = 0;
+    dirs.length = 0;
+    by.push(column);
+    dirs.push(true);
+  }
+
   state.steps = state.steps.filter((step) => step !== current);
-  if (next) {
-    state.steps.push({ id: uid(), op: 'sort', table: name, by: [column], ascending: next === 'asc' });
+  if (by.length) {
+    state.steps.push({ id: uid(), op: 'sort', table: name, by, ascending: dirs });
   }
   state.redo = [];
   await rebuildAll();
