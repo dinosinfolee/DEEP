@@ -366,7 +366,7 @@ const NUM = ['number'];
 
 const STEP_SCHEMAS = {
   drop_columns: {
-    label: '열 삭제', group: '열',
+    label: '열 삭제', group: '열', hidden: true,
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'columns', type: 'columns', label: '삭제할 열', wide: true },
@@ -374,7 +374,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${s.table} · ${(s.columns || []).join(', ')}`,
   },
   rename_column: {
-    label: '열 이름 변경', group: '열',
+    label: '열 이름 변경', group: '열', hidden: true,
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'from', type: 'column', label: '바꿀 열' },
@@ -477,7 +477,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${s.column} · ${s.bins}구간`,
   },
   sort: {
-    label: '정렬', group: '행',
+    label: '정렬', group: '행', hidden: true,
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'by', type: 'columns', label: '기준 열', wide: true },
@@ -893,13 +893,18 @@ async function renderTable() {
       await afterSelect();
     });
     const tag = el('span', `kind-tag kind-${data.kinds[index]}`, kindLetter(data.kinds[index]));
+    const label = el('span', 'th-label', name);
     const mark = sortMark(state.activeTable, name);
-    inner.append(box, tag, el('span', 'th-label', name));
+    inner.append(box, tag, label);
     if (mark) inner.append(el('span', 'sort-mark', mark));
     cell.append(inner);
     cell.classList.add('sortable');
-    cell.title = '누르면 정렬 (오름차순 → 내림차순 → 해제)';
+    cell.title = '누르면 정렬 · 두 번 누르면 이름 고치기';
     cell.onclick = () => cycleSort(state.activeTable, name);
+    cell.ondblclick = (event) => {
+      event.preventDefault();
+      startRename(cell, label, name);
+    };
     headRow.append(cell);
   });
   head.append(headRow);
@@ -973,6 +978,37 @@ function selectBox(checked, title, onToggle) {
   return box;
 }
 
+/* 머리글에서 바로 이름 고치기. 빈 이름이나 그대로면 아무 일도 없다. */
+function startRename(cell, label, name) {
+  if (cell.querySelector('.rename-input')) return;
+  const input = el('input', 'rename-input');
+  input.value = name;
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return;
+    done = true;
+    const next = input.value.trim();
+    if (!commit || !next || next === name) {
+      await renderTable();
+      return;
+    }
+    state.steps.push({ id: uid(), op: 'rename_column', table: state.activeTable, from: name, to: next });
+    state.redo = [];
+    await rebuildAll();
+  };
+  input.onclick = (event) => event.stopPropagation();
+  input.ondblclick = (event) => event.stopPropagation();
+  input.onkeydown = (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') finish(true);
+    if (event.key === 'Escape') finish(false);
+  };
+  input.onblur = () => finish(true);
+}
+
 async function afterSelect() {
   renderSelectBar();
   await renderTable();
@@ -1002,33 +1038,17 @@ async function cycleSort(name, column) {
 }
 
 function renderSelectBar() {
-  const bar = $('#select-bar');
-  if (!bar) return;
-  bar.innerHTML = '';
+  const info = $('#select-info');
+  const button = $('#btn-delete-selection');
+  if (!info || !button) return;
   const cols = state.selCols.length;
   const rows = state.selRows.length;
-  if (!cols && !rows) {
-    bar.hidden = true;
-    return;
-  }
-  bar.hidden = false;
   const parts = [];
   if (cols) parts.push(`열 ${cols}개`);
   if (rows) parts.push(`행 ${rows}개`);
-  bar.append(el('span', 'select-count', `${parts.join(' · ')} 선택됨`));
-  const remove = el('button', 'btn btn-danger');
-  remove.type = 'button';
-  remove.textContent = '선택한 것 삭제';
-  remove.onclick = deleteSelection;
-  const clear = el('button', 'ghost-btn');
-  clear.type = 'button';
-  clear.textContent = '선택 해제';
-  clear.onclick = async () => {
-    state.selCols = [];
-    state.selRows = [];
-    await afterSelect();
-  };
-  bar.append(remove, clear);
+  info.hidden = !parts.length;
+  info.textContent = parts.length ? `${parts.join(' · ')} 선택됨` : '';
+  button.disabled = !parts.length;
 }
 
 async function deleteSelection() {
@@ -2242,6 +2262,8 @@ function wireEvents() {
     event.target.value = '';
     if (file) await openProjectFile(file);
   };
+
+  $('#btn-delete-selection').onclick = deleteSelection;
 
   $('#btn-export-csv').onclick = async () => {
     if (!state.activeTable) return;

@@ -65,13 +65,14 @@
       <button class="tab" data-view="charts" role="tab">시각화</button>
       <button class="tab" data-view="analysis" role="tab">분석</button>
       <div class="tabs-right">
+        <span id="select-info" class="select-count" hidden></span>
+        <button id="btn-delete-selection" class="btn btn-danger" type="button" disabled>삭제</button>
         <span id="step-summary" class="hint"></span>
         <button id="btn-export-csv" class="ghost-btn" type="button">CSV 내려받기</button>
       </div>
     </nav>
 
     <section class="view" id="view-table">
-      <div class="select-bar" id="select-bar" hidden></div>
       <div class="table-scroll" id="table-scroll">
         <div class="empty" id="table-empty">
           <div class="empty-art">
