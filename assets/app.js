@@ -27,7 +27,7 @@ const state = {
   charts: [],
   analyses: [],
   problems: [],
-  view: 'table',
+  view: 'explore',
   page: 0,
   pendingRecipe: null,
 };
@@ -1193,7 +1193,9 @@ function buildEmpty() {
 /* ------------------------------------------------------- 검사 패널 */
 
 function renderInspector() {
-  const title = { table: '전처리', charts: '그래프 추가', analysis: '분석 추가' }[state.view];
+  const title = {
+    explore: '살펴보기', clean: '다듬기', charts: '그래프 추가', analysis: '분석 추가',
+  }[state.view];
   $('#inspector-title').textContent = title;
   const body = $('#inspector-body');
   body.innerHTML = '';
@@ -1234,7 +1236,49 @@ function renderInspector() {
     return;
   }
 
-  // 전처리
+  const meta = tableMeta(state.activeTable);
+  if (!meta) {
+    body.append(el('div', 'empty-note', '왼쪽에서 데이터를 먼저 올려 주세요.'));
+    return;
+  }
+
+  if (state.view === 'explore') renderExplore(body, meta);
+  else renderClean(body, meta);
+}
+
+/* ------------------------------------------------- 1 살펴보기 */
+
+function renderExplore(body, meta) {
+  body.append(tableSummary(meta));
+  const findings = diagnose(meta);
+  body.append(
+    el('div', findings.length ? 'callout callout-warn' : 'callout callout-ok', findings.length
+      ? `다듬기 전에 살펴볼 것이 ${findings.length}가지 있습니다. 위쪽 '2 다듬기'에서 하나씩 처리할 수 있습니다.`
+      : '눈에 띄는 문제가 없습니다. 바로 시각화로 넘어가도 좋습니다.')
+  );
+  body.append(columnProfile(meta, false));
+}
+
+function tableSummary(meta) {
+  const box = el('div', 'summary-box');
+  box.append(el('div', 'summary-name', meta.name));
+  const line = el('div', 'summary-line');
+  line.append(el('b', null, numberFormat.format(meta.rows)), el('span', null, '행'));
+  line.append(el('b', null, String(meta.columns.length)), el('span', null, '열'));
+  box.append(line);
+  const counts = {};
+  meta.columns.forEach((column) => { counts[column.kind] = (counts[column.kind] || 0) + 1; });
+  const kinds = el('div', 'summary-kinds');
+  Object.entries(counts).forEach(([kind, count]) => {
+    kinds.append(el('span', 'summary-kind', `${kindName(kind)} ${count}`));
+  });
+  box.append(kinds);
+  return box;
+}
+
+/* ------------------------------------------------- 2 다듬기 */
+
+function renderClean(body, meta) {
   const tools = el('div', 'undo-row');
   const mk = (label, disabled, onClick, extra) => {
     const button = el('button', extra || null);
@@ -1254,28 +1298,203 @@ function renderInspector() {
     (state.steps.length ? `전처리 ${state.steps.length}번 적용됨` : '올린 그대로의 상태입니다.')
     + (state.problems.length ? ` · ${state.problems.length}개 실패` : '')));
 
-  const groups = {};
-  Object.entries(STEP_SCHEMAS).forEach(([op, schema]) => {
-    if (schema.hidden) return;
-    (groups[schema.group] ||= []).push([op, schema]);
+  const findings = diagnose(meta);
+  if (findings.length) {
+    body.append(el('div', 'section-label alert-label', `살펴볼 것 ${findings.length}`));
+    findings.forEach((finding) => body.append(findingCard(meta, finding)));
+  } else {
+    body.append(el('div', 'callout callout-ok', '결측값·이상치·중복 행이 보이지 않습니다.'));
+  }
+
+  body.append(columnProfile(meta, true));
+
+  body.append(el('div', 'section-label', '표 전체에 하는 일'));
+  const grid = el('div', 'op-grid');
+  ['filter_rows', 'new_column', 'group', 'concat', 'merge', 'kmeans_label'].forEach((op) => {
+    const schema = STEP_SCHEMAS[op];
+    const button = el('button', 'op-btn');
+    button.type = 'button';
+    button.textContent = schema.label;
+    const needsPick = schema.needs && schema.needs !== 'optional';
+    button.disabled = Boolean(needsPick) && !state.selCols.length;
+    button.title = button.disabled ? '표에서 열을 먼저 고르세요' : '';
+    button.onclick = () => openStepDialog(op, {});
+    grid.append(button);
   });
-  Object.entries(groups).forEach(([group, entries]) => {
-    body.append(el('div', 'section-label', group));
-    const grid = el('div', 'op-grid');
-    entries.forEach(([op, schema]) => {
-      if (schema.hidden) return;
+  body.append(grid);
+}
+
+/* 표 메타만 보고 문제를 찾는다. 커널을 다시 부르지 않는다. */
+function diagnose(meta) {
+  const findings = [];
+  meta.columns.forEach((column) => {
+    if (column.missing > 0) findings.push({ type: 'missing', column });
+  });
+  if (meta.duplicated > 0) findings.push({ type: 'duplicated', count: meta.duplicated });
+  meta.columns.forEach((column) => {
+    if (column.numericLike) findings.push({ type: 'type', column });
+  });
+  meta.columns.forEach((column) => {
+    if (column.outliers > 0) findings.push({ type: 'outlier', column });
+  });
+  return findings;
+}
+
+function findingCard(meta, finding) {
+  const card = el('div', 'finding');
+  const head = el('div', 'finding-head');
+  const info = el('div', 'finding-body');
+  const acts = el('div', 'finding-acts');
+  const add = (label, step, tone) => {
+    const button = el('button', tone ? `finding-btn ${tone}` : 'finding-btn');
+    button.type = 'button';
+    button.textContent = label;
+    button.onclick = async () => {
+      state.steps.push({ id: uid(), ...step, table: meta.name });
+      state.redo = [];
+      await rebuildAll();
+    };
+    acts.append(button);
+  };
+
+  if (finding.type === 'missing') {
+    const column = finding.column;
+    head.append(el('span', 'finding-kind', '결측값'), el('span', 'finding-col', column.name));
+    info.append(el('div', 'finding-fact',
+      `${numberFormat.format(column.missing)}개 비어 있음 · 전체의 ${(column.missingRatio * 100).toFixed(1)}%`));
+    info.append(miniBar(column.missingRatio));
+    if (column.kind === 'number') {
+      add('평균으로 채우기', { op: 'missing', method: 'mean', columns: [column.name] });
+      add('중앙값으로 채우기', { op: 'missing', method: 'median', columns: [column.name] });
+    } else {
+      add('최빈값으로 채우기', { op: 'missing', method: 'mode', columns: [column.name] });
+    }
+    add('빈 행 삭제', { op: 'missing', method: 'drop_rows', columns: [column.name] }, 'danger');
+  } else if (finding.type === 'outlier') {
+    const column = finding.column;
+    head.append(el('span', 'finding-kind', '이상치'), el('span', 'finding-col', column.name));
+    info.append(el('div', 'finding-fact', `${column.outliers}개가 보통 범위를 벗어남 · IQR 기준`));
+    info.append(el('div', 'finding-fact hint',
+      `가장 작은 값 ${fmt(column.min)} · 중앙값 ${fmt(column.median)} · 가장 큰 값 ${fmt(column.max)}`));
+    const look = el('button', 'finding-btn');
+    look.type = 'button';
+    look.textContent = '표에서 보기';
+    look.title = '이 열을 큰 값부터 정렬해 눈으로 확인합니다';
+    look.onclick = () => sortDescending(meta.name, column.name);
+    acts.append(look);
+    add('경계값으로 자르기', { op: 'outlier', columns: [column.name], method: 'iqr', k: 1.5, action: 'clip' });
+    add('해당 행 삭제', { op: 'outlier', columns: [column.name], method: 'iqr', k: 1.5, action: 'remove' }, 'danger');
+  } else if (finding.type === 'duplicated') {
+    head.append(el('span', 'finding-kind', '중복 행'));
+    info.append(el('div', 'finding-fact', `똑같은 행이 ${finding.count}개 있음`));
+    add('중복 지우기', { op: 'drop_duplicates', columns: [] }, 'danger');
+  } else if (finding.type === 'type') {
+    const column = finding.column;
+    head.append(el('span', 'finding-kind', '자료형'), el('span', 'finding-col', column.name));
+    info.append(el('div', 'finding-fact', '숫자처럼 보이는데 문자로 읽히고 있음'));
+    info.append(el('div', 'finding-fact hint', '이대로면 평균을 내거나 그래프를 그릴 수 없습니다.'));
+    add('숫자로 바꾸기', { op: 'change_type', column: column.name, to: 'number' });
+  }
+
+  card.append(head, info, acts);
+  return card;
+}
+
+function miniBar(ratio) {
+  const wrap = el('div', 'mini-bar');
+  const fill = el('i');
+  fill.style.width = `${Math.max(2, Math.min(100, ratio * 100))}%`;
+  wrap.append(fill);
+  return wrap;
+}
+
+/* 이상치를 눈으로 보도록 그 열을 큰 값부터 정렬한다. */
+async function sortDescending(name, column) {
+  state.steps = state.steps.filter((step) => !(step.op === 'sort' && step.table === name));
+  state.steps.push({ id: uid(), op: 'sort', table: name, by: [column], ascending: [false] });
+  state.redo = [];
+  await rebuildAll();
+}
+
+/* ------------------------------------------------- 열 프로필 */
+
+function columnProfile(meta, withActions) {
+  const box = el('div', 'profile');
+  box.append(el('div', 'section-label', '열 프로필'));
+  const picked = state.selCols.length === 1
+    ? meta.columns.find((column) => column.name === state.selCols[0])
+    : null;
+  if (!picked) {
+    box.append(el('div', 'empty-note', state.selCols.length > 1
+      ? '열을 하나만 고르면 그 열을 자세히 보여줍니다.'
+      : '표에서 열 제목의 네모를 누르면 그 열을 자세히 보여줍니다.'));
+    return box;
+  }
+
+  const card = el('div', 'profile-card');
+  const head = el('div', 'profile-head');
+  head.append(el('span', 'profile-name', picked.name), el('span', 'profile-kind', kindName(picked.kind)));
+  card.append(head);
+
+  if (picked.hist && picked.hist.length) {
+    const top = Math.max(...picked.hist);
+    const spark = el('div', 'spark');
+    picked.hist.forEach((count) => {
+      const bar = el('i');
+      bar.style.height = `${top ? Math.max(3, (count / top) * 100) : 3}%`;
+      bar.title = `${count}개`;
+      spark.append(bar);
+    });
+    card.append(spark);
+    const ends = el('div', 'spark-ends');
+    ends.append(el('span', null, fmt(picked.min)), el('span', null, fmt(picked.max)));
+    card.append(ends);
+  }
+
+  const rows = [];
+  if (picked.kind === 'number') {
+    rows.push(['평균', fmt(picked.mean)], ['중앙값', fmt(picked.median)],
+      ['표준편차', fmt(picked.std)], ['최소 · 최대', `${fmt(picked.min)} ~ ${fmt(picked.max)}`]);
+  }
+  rows.push(['결측', `${picked.missing}개`], ['고유값', `${numberFormat.format(picked.unique)}개`]);
+  if (picked.outliers) rows.push(['이상치', `${picked.outliers}개`]);
+  const list = el('div', 'profile-stats');
+  rows.forEach(([label, value]) => {
+    const row = el('div', 'profile-stat');
+    row.append(el('span', null, label), el('b', null, String(value)));
+    list.append(row);
+  });
+  card.append(list);
+
+  if (picked.top && picked.top.length) {
+    card.append(el('div', 'profile-sub', '많이 나온 값'));
+    const tops = el('div', 'profile-tops');
+    picked.top.forEach((item) => {
+      const row = el('div', 'profile-top');
+      row.append(el('span', null, item.value), el('b', null, `${item.count}개`));
+      tops.append(row);
+    });
+    card.append(tops);
+  }
+
+  if (withActions) {
+    const ops = picked.kind === 'number'
+      ? ['bin', 'normalize', 'outlier', 'missing', 'change_type']
+      : ['change_type', 'missing'];
+    card.append(el('div', 'profile-sub', '이 열에 할 수 있는 일'));
+    const grid = el('div', 'op-grid profile-ops');
+    ops.forEach((op) => {
       const button = el('button', 'op-btn');
       button.type = 'button';
-      button.textContent = schema.label;
-      const needsPick = schema.needs && schema.needs !== 'optional';
-      button.disabled = Boolean(needsPick) && !state.selCols.length;
-      button.title = button.disabled ? '표에서 열을 먼저 고르세요' : '';
+      button.textContent = STEP_SCHEMAS[op].label;
       button.onclick = () => openStepDialog(op, {});
       grid.append(button);
     });
-    body.append(grid);
-  });
+    card.append(grid);
+  }
 
+  box.append(card);
+  return box;
 }
 
 function toolButton(path, title, run) {
@@ -1923,7 +2142,10 @@ function switchView(view) {
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.classList.toggle('active', tab.dataset.view === view);
   });
-  $('#view-table').hidden = view !== 'table';
+  const onTable = view === 'explore' || view === 'clean';
+  $('#view-table').hidden = !onTable;
+  // 삭제는 다듬는 단계에서만. 살펴보는 동안에는 데이터를 건드리지 않는다.
+  $('#btn-delete-selection').hidden = view !== 'clean';
   $('#view-charts').hidden = view !== 'charts';
   $('#view-analysis').hidden = view !== 'analysis';
   if (view === 'charts') renderCharts();
@@ -2068,7 +2290,7 @@ async function applyPayload(payload) {
   await rebuildAll();
   renderCharts();
   renderAnalyses();
-  switchView(state.charts.length ? 'charts' : 'table');
+  switchView(state.charts.length ? 'charts' : 'explore');
 }
 
 async function openProjectFile(file) {
@@ -2215,7 +2437,7 @@ async function tryRunPendingRecipe() {
   renderCharts();
   renderAnalyses();
   toast('받은 분석을 그대로 다시 그렸습니다.', 'ok');
-  switchView(state.charts.length ? 'charts' : 'table');
+  switchView(state.charts.length ? 'charts' : 'explore');
 }
 
 function showRecipeGate(recipe) {
@@ -2411,7 +2633,7 @@ const BOOT_STEPS = { pyodide: [25, '파이썬 실행기를 내려받는 중'], p
 
 async function main() {
   wireEvents();
-  switchView('table');
+  switchView('explore');
 
   kernel = new Kernel((stage, detail) => {
     const step = BOOT_STEPS[stage];

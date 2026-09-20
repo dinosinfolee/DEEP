@@ -115,7 +115,15 @@ def column_info(series: pd.Series) -> dict:
                 q3=q3,
                 outliers=int(((numeric < low) | (numeric > high)).sum()),
             )
+            # 열 프로필에 그릴 작은 분포 그림. 화면에서 바로 쓰도록 미리 센다.
+            if numeric.max() > numeric.min():
+                counts = pd.cut(numeric, bins=12).value_counts(sort=False)
+                info["hist"] = [int(value) for value in counts.tolist()]
     elif kind in ("text", "bool") and len(valid):
+        # 숫자로 읽힐 값이 대부분인데 문자로 잡혀 있으면 검진표에서 알려준다.
+        numericLike = float(pd.to_numeric(valid, errors="coerce").notna().mean())
+        if numericLike >= 0.9:
+            info["numericLike"] = numericLike
         counts = valid.astype("object").value_counts().head(5)
         info["top"] = [
             {"value": str(index), "count": int(count)}
@@ -133,6 +141,7 @@ def table_meta(name: str) -> dict:
         "name": name,
         "rows": int(len(frame)),
         "columns": [column_info(frame[column]) for column in frame.columns],
+        "duplicated": int(frame.duplicated().sum()),
         "isSource": name in RAW,
     }
 
