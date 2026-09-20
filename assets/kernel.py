@@ -433,6 +433,16 @@ def step_sort(step):
     TABLES[name] = frame.sort_values(columns, ascending=ascending).reset_index(drop=True)
 
 
+def step_drop_rows(step):
+    """표에서 고른 행을 지운다. 위치는 이 단계가 적용되는 시점의 순서를 따른다."""
+    name = step["table"]
+    frame = get_table(name)
+    positions = sorted({int(i) for i in step.get("rows", []) if 0 <= int(i) < len(frame)})
+    if not positions:
+        raise KernelError("삭제할 행이 없습니다.")
+    TABLES[name] = frame.drop(frame.index[positions]).reset_index(drop=True)
+
+
 def step_drop_duplicates(step):
     name = step["table"]
     frame = get_table(name)
@@ -540,6 +550,7 @@ STEP_RUNNERS = {
     "normalize": step_normalize,
     "bin": step_bin,
     "sort": step_sort,
+    "drop_rows": step_drop_rows,
     "drop_duplicates": step_drop_duplicates,
     "group": step_group,
     "concat": step_concat,

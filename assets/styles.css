@@ -309,3 +309,33 @@ table.grid td.na { color: #b9b9b5; }
   .inspector { display: none; }
   .project-title { max-width: 10rem; }
 }
+
+/* ---------------------------------------------- 표에서 직접 고르기·정렬 */
+
+.select-bar {
+  display: flex; align-items: center; gap: .5rem; flex: none;
+  padding: .45rem .75rem; background: var(--accent-soft);
+  border-bottom: 1px solid var(--line-strong);
+}
+.select-count { font-size: .78125rem; font-weight: 650; color: var(--accent); margin-right: auto; }
+
+.sel-box { width: .9rem; height: .9rem; margin: 0; accent-color: var(--accent); cursor: pointer; flex: none; }
+
+td.row-index { white-space: nowrap; }
+td.row-index, th.row-index { display: flex; align-items: center; gap: .35rem; }
+.row-no { color: var(--ink-muted); }
+
+table.grid th.sortable { cursor: pointer; user-select: none; }
+table.grid th.sortable:hover { background: #e0e0dc; }
+.th-label { overflow: hidden; text-overflow: ellipsis; }
+.sort-mark { margin-left: auto; padding-left: .3rem; color: var(--accent); font-weight: 700; }
+
+table.grid th.col-selected { background: var(--accent-soft); }
+table.grid td.col-selected { background: #f5f8ff; }
+table.grid tr.row-selected td { background: var(--accent-soft); }
+
+.undo-row { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .25rem; }
+.undo-row .ghost-btn { flex: 1; justify-content: center; }
+.undo-row .ghost-btn:disabled { opacity: .45; cursor: default; }
+.danger-btn { color: var(--danger); }
+.undo-hint { display: block; margin-bottom: .6rem; }

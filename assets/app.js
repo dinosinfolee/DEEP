@@ -20,6 +20,10 @@ const state = {
   sources: {},
   activeTable: null,
   steps: [],
+  redo: [],
+  selCols: [],
+  selRows: [],
+  selTable: null,
   charts: [],
   analyses: [],
   problems: [],
@@ -481,6 +485,11 @@ const STEP_SCHEMAS = {
     ],
     describe: (s) => `${(s.by || []).join(', ')} ${s.ascending ? '↑' : '↓'}`,
   },
+  drop_rows: {
+    label: '행 삭제', group: '행', hidden: true,
+    fields: [{ key: 'table', type: 'table', label: '대상 표' }],
+    describe: (s) => `${(s.rows || []).length}개 행`,
+  },
   drop_duplicates: {
     label: '중복 행 제거', group: '행',
     fields: [
@@ -543,10 +552,10 @@ const STEP_SCHEMAS = {
 
 /* merge 단계처럼 열 목록을 left/right 표에서 따로 가져와야 하는 필드가 있어,
    필드를 하나씩 그리면서 values.table을 잠시 그 표로 바꿔 끼운다. */
-function buildStepFields(container, op, values, onChange) {
-  const fields = STEP_SCHEMAS[op].fields;
+function buildStepFields(container, op, values, onChange, skipKeys) {
+  const fields = STEP_SCHEMAS[op].fields.filter((field) => !(skipKeys || []).includes(field.key));
   container.innerHTML = '';
-  const rerender = () => buildStepFields(container, op, values, onChange);
+  const rerender = () => buildStepFields(container, op, values, onChange, skipKeys);
   fields.forEach((field) => {
     const holder = el('div', 'field-holder');
     const original = values.table;
@@ -837,8 +846,14 @@ function columnMenu(anchor, table, column) {
 async function renderTable() {
   const scroll = $('#table-scroll');
   const foot = $('#table-foot');
+  if (state.selTable !== state.activeTable) {
+    state.selCols = [];
+    state.selRows = [];
+    state.selTable = state.activeTable;
+  }
   if (!state.activeTable) {
     foot.hidden = true;
+    renderSelectBar();
     if (!$('#table-empty')) {
       scroll.innerHTML = '';
       scroll.append(buildEmpty());
@@ -852,13 +867,37 @@ async function renderTable() {
   const table = el('table', 'grid');
   const head = el('thead');
   const headRow = el('tr');
-  headRow.append(thCell('', 'row-index'));
+  const corner = el('th', 'row-index');
+  const pagePositions = data.rows.map((_, i) => data.offset + i);
+  const allBox = selectBox(
+    pagePositions.length > 0 && pagePositions.every((i) => state.selRows.includes(i)),
+    '이 쪽의 행을 모두 선택',
+    async (checked) => {
+      state.selRows = checked
+        ? [...new Set([...state.selRows, ...pagePositions])]
+        : state.selRows.filter((i) => !pagePositions.includes(i));
+      await afterSelect();
+    }
+  );
+  corner.append(allBox);
+  headRow.append(corner);
   data.columns.forEach((name, index) => {
     const cell = el('th');
+    const picked = state.selCols.includes(name);
+    if (picked) cell.classList.add('col-selected');
     const inner = el('div', 'th-inner');
+    const box = selectBox(picked, '이 열을 선택', async (checked) => {
+      state.selCols = checked ? [...state.selCols, name] : state.selCols.filter((c) => c !== name);
+      await afterSelect();
+    });
     const tag = el('span', `kind-tag kind-${data.kinds[index]}`, kindLetter(data.kinds[index]));
-    inner.append(tag, el('span', null, name));
+    const mark = sortMark(state.activeTable, name);
+    inner.append(box, tag, el('span', 'th-label', name));
+    if (mark) inner.append(el('span', 'sort-mark', mark));
     cell.append(inner);
+    cell.classList.add('sortable');
+    cell.title = '누르면 정렬 (오름차순 → 내림차순 → 해제)';
+    cell.onclick = () => cycleSort(state.activeTable, name);
     headRow.append(cell);
   });
   head.append(headRow);
@@ -866,14 +905,30 @@ async function renderTable() {
 
   const body = el('tbody');
   data.rows.forEach((row, rowIndex) => {
+    const position = data.offset + rowIndex;
+    const picked = state.selRows.includes(position);
     const tr = el('tr');
-    tr.append(tdCell(String(data.offset + rowIndex + 1), 'row-index'));
+    if (picked) tr.classList.add('row-selected');
+    const indexCell = el('td', 'row-index');
+    indexCell.append(
+      selectBox(picked, '이 행을 선택', async (checked) => {
+        state.selRows = checked
+          ? [...state.selRows, position]
+          : state.selRows.filter((i) => i !== position);
+        await afterSelect();
+      }),
+      el('span', 'row-no', String(position + 1))
+    );
+    tr.append(indexCell);
     row.forEach((value, index) => {
       const isNumber = data.kinds[index] === 'number';
       const empty = value === null || value === undefined || value === '';
-      tr.append(
-        tdCell(empty ? '—' : isNumber ? fmt(value) : String(value), `${isNumber ? 'num' : ''}${empty ? ' na' : ''}`.trim())
+      const cell = tdCell(
+        empty ? '—' : isNumber ? fmt(value) : String(value),
+        `${isNumber ? 'num' : ''}${empty ? ' na' : ''}`.trim()
       );
+      if (state.selCols.includes(data.columns[index])) cell.classList.add('col-selected');
+      tr.append(cell);
     });
     body.append(tr);
   });
@@ -886,6 +941,7 @@ async function renderTable() {
   $('#page-label').textContent = `${state.page + 1} / ${pages} 쪽 · 전체 ${numberFormat.format(data.total)}행`;
   $('#page-prev').disabled = state.page === 0;
   $('#page-next').disabled = state.page >= pages - 1;
+  renderSelectBar();
 }
 
 function thCell(text, className) {
@@ -894,6 +950,127 @@ function thCell(text, className) {
 }
 function tdCell(text, className) {
   return el('td', className, text);
+}
+
+/* ------------------------------------ 표에서 바로 고르고, 지우고, 정렬하기 */
+
+function selectBox(checked, title, onToggle) {
+  const box = el('input');
+  box.type = 'checkbox';
+  box.className = 'sel-box';
+  box.checked = checked;
+  box.title = title;
+  // 머리글은 누르면 정렬이므로, 선택 상자 클릭이 정렬까지 번지지 않게 막는다.
+  box.onclick = (event) => event.stopPropagation();
+  box.onchange = () => {
+    state.selTable = state.activeTable;
+    onToggle(box.checked);
+  };
+  return box;
+}
+
+async function afterSelect() {
+  renderSelectBar();
+  await renderTable();
+}
+
+function sortStepFor(name) {
+  return state.steps.find((step) => step.op === 'sort' && step.table === name) || null;
+}
+
+function sortMark(name, column) {
+  const step = sortStepFor(name);
+  if (!step || (step.by || [])[0] !== column) return '';
+  return step.ascending ? '↑' : '↓';
+}
+
+/* 머리글을 누를 때마다 오름차순 → 내림차순 → 해제로 돈다. */
+async function cycleSort(name, column) {
+  const current = sortStepFor(name);
+  const same = current && (current.by || [])[0] === column;
+  const next = !same ? 'asc' : current.ascending ? 'desc' : null;
+  state.steps = state.steps.filter((step) => step !== current);
+  if (next) {
+    state.steps.push({ id: uid(), op: 'sort', table: name, by: [column], ascending: next === 'asc' });
+  }
+  state.redo = [];
+  await rebuildAll();
+}
+
+function renderSelectBar() {
+  const bar = $('#select-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  const cols = state.selCols.length;
+  const rows = state.selRows.length;
+  if (!cols && !rows) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const parts = [];
+  if (cols) parts.push(`열 ${cols}개`);
+  if (rows) parts.push(`행 ${rows}개`);
+  bar.append(el('span', 'select-count', `${parts.join(' · ')} 선택됨`));
+  const remove = el('button', 'btn btn-danger');
+  remove.type = 'button';
+  remove.textContent = '선택한 것 삭제';
+  remove.onclick = deleteSelection;
+  const clear = el('button', 'ghost-btn');
+  clear.type = 'button';
+  clear.textContent = '선택 해제';
+  clear.onclick = async () => {
+    state.selCols = [];
+    state.selRows = [];
+    await afterSelect();
+  };
+  bar.append(remove, clear);
+}
+
+async function deleteSelection() {
+  const name = state.activeTable;
+  if (!name) return;
+  const columns = [...state.selCols];
+  // 행 위치는 지금 보고 있는 순서 기준이라, 열보다 먼저 지워야 어긋나지 않는다.
+  const rows = [...state.selRows];
+  state.selCols = [];
+  state.selRows = [];
+  if (rows.length) state.steps.push({ id: uid(), op: 'drop_rows', table: name, rows });
+  if (columns.length) state.steps.push({ id: uid(), op: 'drop_columns', table: name, columns });
+  state.redo = [];
+  await rebuildAll();
+}
+
+async function undoStep() {
+  if (!state.steps.length) return;
+  state.redo.push(state.steps.pop());
+  state.selCols = [];
+  state.selRows = [];
+  await rebuildAll();
+}
+
+async function redoStep() {
+  if (!state.redo.length) return;
+  state.steps.push(state.redo.pop());
+  await rebuildAll();
+}
+
+async function resetSteps() {
+  if (!state.steps.length) return;
+  const ok = await openModal({
+    title: '데이터 초기화',
+    okLabel: '초기화',
+    build: (body) => {
+      body.append(el('p', null, '전처리한 내용을 모두 되돌려 올린 그대로의 상태로 돌아갑니다.'));
+      body.append(el('p', 'hint', '올린 파일과 그래프·분석은 그대로 남습니다.'));
+    },
+  });
+  if (!ok) return;
+  state.steps = [];
+  state.redo = [];
+  state.selCols = [];
+  state.selRows = [];
+  await rebuildAll();
 }
 
 function buildEmpty() {
@@ -956,14 +1133,35 @@ function renderInspector() {
   }
 
   // 전처리
+  const tools = el('div', 'undo-row');
+  const mk = (label, disabled, onClick, extra) => {
+    const button = el('button', `ghost-btn${extra ? ' ' + extra : ''}`);
+    button.type = 'button';
+    button.textContent = label;
+    button.disabled = disabled;
+    button.onclick = onClick;
+    return button;
+  };
+  tools.append(
+    mk('되돌리기', !state.steps.length, undoStep),
+    mk('다시 하기', !state.redo.length, redoStep),
+    mk('데이터 초기화', !state.steps.length, resetSteps, 'danger-btn')
+  );
+  body.append(tools);
+  body.append(el('div', 'hint undo-hint',
+    (state.steps.length ? `전처리 ${state.steps.length}번 적용됨` : '올린 그대로의 상태입니다.')
+    + (state.problems.length ? ` · ${state.problems.length}개 실패` : '')));
+
   const groups = {};
   Object.entries(STEP_SCHEMAS).forEach(([op, schema]) => {
+    if (schema.hidden) return;
     (groups[schema.group] ||= []).push([op, schema]);
   });
   Object.entries(groups).forEach(([group, entries]) => {
     body.append(el('div', 'section-label', group));
     const grid = el('div', 'op-grid');
     entries.forEach(([op, schema]) => {
+      if (schema.hidden) return;
       const button = el('button', 'op-btn');
       button.type = 'button';
       button.textContent = schema.label;
@@ -973,43 +1171,6 @@ function renderInspector() {
     body.append(grid);
   });
 
-  body.append(el('div', 'section-label', `적용한 단계 (${state.steps.length})`));
-  const list = el('div', 'step-list');
-  if (!state.steps.length) {
-    list.append(el('div', 'empty-note', '아직 단계가 없습니다. 위에서 하나 골라 보세요.'));
-  }
-  state.steps.forEach((step, index) => {
-    const schema = STEP_SCHEMAS[step.op];
-    const problem = state.problems.find((item) => item.id === step.id);
-    const item = el('div', `step-item${step.disabled ? ' disabled' : ''}${problem ? ' failed' : ''}`);
-    item.append(el('span', 'step-order', String(index + 1)));
-    const main = el('div', 'step-main');
-    main.append(el('div', 'step-label', schema.label));
-    main.append(el('div', 'step-detail', schema.describe ? schema.describe(step) : ''));
-    if (problem) main.append(el('div', 'step-error', problem.error));
-    item.append(main);
-
-    const tools = el('div', 'step-tools');
-    tools.append(
-      toolButton(step.disabled ? ICONS.eyeOff : ICONS.eye, step.disabled ? '켜기' : '끄기', async () => {
-        step.disabled = !step.disabled;
-        await rebuildAll();
-      }),
-      toolButton(ICONS.up, '위로', async () => {
-        if (index === 0) return;
-        [state.steps[index - 1], state.steps[index]] = [state.steps[index], state.steps[index - 1]];
-        await rebuildAll();
-      }),
-      toolButton(ICONS.gear, '수정', () => openStepDialog(step.op, step, step.id)),
-      toolButton(ICONS.trash, '삭제', async () => {
-        state.steps.splice(index, 1);
-        await rebuildAll();
-      })
-    );
-    item.append(tools);
-    list.append(item);
-  });
-  body.append(list);
 }
 
 function toolButton(path, title, run) {
@@ -1038,7 +1199,7 @@ function openStepDialog(op, preset, editId) {
       form.style.display = 'flex';
       form.style.flexWrap = 'wrap';
       form.style.gap = '.7rem';
-      buildStepFields(form, op, values, () => {});
+      buildStepFields(form, op, values, () => {}, values.table ? ['table'] : []);
       body.append(form);
     },
   }).then(async (accepted) => {
@@ -2135,12 +2296,13 @@ async function main() {
 
   kernel = new Kernel((stage, detail) => {
     const step = BOOT_STEPS[stage];
-    if (step) {
-      $('#boot-bar-fill').style.width = `${step[0]}%`;
-      $('#boot-text').textContent = detail ? `${step[1]} — ${detail}` : step[1];
-    }
+    // 부팅 화면은 준비가 끝나면 사라진다. 꾸러미 지연 로딩처럼 그 뒤에 오는 소식도 있다.
+    const fill = $('#boot-bar-fill');
+    const text = $('#boot-text');
+    if (step && fill) fill.style.width = `${step[0]}%`;
+    if (step && text) text.textContent = detail ? `${step[1]} — ${detail}` : step[1];
     if (stage === 'error') {
-      $('#boot-text').textContent = detail;
+      if (text) text.textContent = detail;
       $('#kernel-chip').className = 'chip chip-error';
       $('#kernel-chip-text').textContent = '오류';
     }
@@ -2149,7 +2311,8 @@ async function main() {
   try {
     await kernel.ready;
   } catch (error) {
-    $('#boot-text').textContent = error.message;
+    const text = $('#boot-text');
+    if (text) text.textContent = error.message;
     return;
   }
 
