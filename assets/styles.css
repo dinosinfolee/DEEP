@@ -99,7 +99,15 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
 
 /* ---------------------------------------------------------------- 뼈대 */
-.shell { flex: 1; min-height: 0; display: grid; grid-template-columns: 17rem minmax(0,1fr) 20.5rem; background: var(--line); gap: 1px; }
+.shell {
+  flex: 1; min-height: 0; display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr) 20.5rem;
+  background: var(--bg); gap: 1rem; padding: 1rem;
+}
+.sidebar, .main, .inspector {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden;
+}
 .sidebar, .inspector { background: var(--surface); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .main { background: var(--surface); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
@@ -347,3 +355,32 @@ table.grid tr.row-selected td { background: var(--accent-soft); }
 .undo-row .danger-btn { color: var(--danger); }
 .undo-row .danger-btn:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
 .undo-hint { display: block; margin-bottom: .6rem; }
+
+/* --------------------------------------------- 수식에 넣는 속성 단추 */
+
+.col-chip-box { display: flex; flex-direction: column; gap: .35rem; margin-top: .4rem; }
+.col-chip-head { font-size: .6875rem; font-weight: 700; color: var(--ink-muted); }
+.col-chip-row { display: flex; flex-wrap: wrap; gap: .3rem; }
+.col-chip {
+  display: inline-flex; align-items: center; gap: .3rem;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: #fff; padding: .2rem .6rem .2rem .45rem;
+  font-size: .75rem; font-weight: 550; color: var(--ink-soft); cursor: pointer;
+  transition: border-color .12s ease, background .12s ease, color .12s ease;
+}
+.col-chip:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.col-chip-kind {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1rem; height: 1rem; border-radius: .25rem;
+  background: var(--surface-sunken); font-size: .625rem; font-weight: 700; color: var(--ink-muted);
+}
+.col-chip:hover .col-chip-kind { background: #fff; color: var(--accent); }
+
+.dialog-target {
+  margin-bottom: .75rem; padding: .5rem .7rem;
+  border: 1px solid var(--line); border-radius: .5rem; background: var(--surface-sunken);
+  font-size: .78125rem; font-weight: 600; color: var(--ink-soft);
+}
+
+.op-btn:disabled { opacity: .4; cursor: not-allowed; }
+.op-btn:disabled:hover { border-color: var(--line); background: #fff; color: var(--ink-soft); }

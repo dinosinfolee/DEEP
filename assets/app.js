@@ -229,6 +229,37 @@ function mountSettings(container, fields, item, defaultsFor, onUpdate) {
   buildFields(container, fields, item, handle);
 }
 
+/* 수식·조건 칸 아래에 그 표의 속성을 늘어놓는다. 누르면 커서 자리에 들어간다.
+   열 이름을 손으로 적다 틀리는 일을 없애려는 것이다. */
+function columnChips(values, field, input, onChange) {
+  const box = el('div', 'col-chip-box');
+  const name = values.table;
+  const columns = columnsOf(name, field.chipKinds);
+  box.append(el('div', 'col-chip-head', `${name || '표'}의 속성`));
+  const row = el('div', 'col-chip-row');
+  if (!columns.length) row.append(el('span', 'hint', '쓸 수 있는 열이 없습니다.'));
+  columns.forEach((column) => {
+    const chip = el('button', 'col-chip');
+    chip.type = 'button';
+    chip.append(el('span', 'col-chip-kind', kindLetter(column.kind)), el('span', null, column.name));
+    chip.title = `${column.name} (${kindName(column.kind)})`;
+    chip.onclick = () => {
+      const token = '`' + column.name + '`';
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? start;
+      input.value = input.value.slice(0, start) + token + input.value.slice(end);
+      values[field.key] = input.value;
+      onChange(values, false);
+      input.focus();
+      const at = start + token.length;
+      input.setSelectionRange(at, at);
+    };
+    row.append(chip);
+  });
+  box.append(row);
+  return box;
+}
+
 function buildFields(container, fields, values, onChange) {
   container.innerHTML = '';
   const rerender = () => buildFields(container, fields, values, onChange);
@@ -288,7 +319,7 @@ function buildFields(container, fields, values, onChange) {
             values[field.key] = available
               .map((item) => item.name)
               .filter((name) => selected.has(name));
-            onChange(values);
+            onChange(values, false);
           };
           row.append(box, el('span', null, column.name));
           input.append(row);
@@ -313,7 +344,7 @@ function buildFields(container, fields, values, onChange) {
             values[field.key] = state.tables
               .map((item) => item.name)
               .filter((name) => selected.has(name));
-            onChange(values);
+            onChange(values, false);
           };
           row.append(box, el('span', null, table.name));
           input.append(row);
@@ -338,7 +369,7 @@ function buildFields(container, fields, values, onChange) {
         input.value = values[field.key];
         input.oninput = () => {
           values[field.key] = input.value === '' ? field.default : Number(input.value);
-          onChange(values);
+          onChange(values, false);
         };
         break;
       }
@@ -348,7 +379,7 @@ function buildFields(container, fields, values, onChange) {
         if (values[field.key] === undefined) values[field.key] = field.default ?? '';
         input.value = values[field.key];
         if (field.placeholder) input.placeholder = field.placeholder;
-        input.oninput = () => { values[field.key] = input.value; onChange(values); };
+        input.oninput = () => { values[field.key] = input.value; onChange(values, false); };
       }
     }
 
@@ -356,6 +387,7 @@ function buildFields(container, fields, values, onChange) {
     if (isCheck) wrap.append(input, label);
     else wrap.append(label, input);
     if (field.hint) wrap.append(el('span', 'hint', field.hint));
+    if (field.columns) wrap.append(columnChips(values, field, input, onChange));
     container.append(wrap);
   });
 }
@@ -383,7 +415,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${s.from} → ${s.to}`,
   },
   change_type: {
-    label: '자료형 변경', group: '열',
+    label: '자료형 변경', group: '열', needs: 'column',
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'column', type: 'column', label: '열' },
@@ -401,8 +433,8 @@ const STEP_SCHEMAS = {
       { key: 'name', type: 'text', label: '새 열 이름' },
       {
         key: 'expr', type: 'text', label: '수식', wide: true,
-        placeholder: '`학생수` / `교원수`',
-        hint: '열 이름에 한글·공백이 있으면 `학생수` 처럼 backtick으로 감싸세요.',
+        placeholder: '`학생수` / `교원수`', columns: true,
+        hint: '아래 속성을 누르면 수식에 들어갑니다. 사칙연산은 + - * / 를 씁니다.',
       },
     ],
     describe: (s) => `${s.name} = ${s.expr}`,
@@ -412,14 +444,15 @@ const STEP_SCHEMAS = {
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       {
-        key: 'query', type: 'text', label: '남길 조건', wide: true,
+        key: 'query', type: 'text', label: '남길 조건', wide: true, columns: true,
         placeholder: '`학생수` > 500 and `시도` == "세종특별자치시"',
+        hint: '아래 속성을 누르면 조건에 들어갑니다. 비교는 > < >= <= == 을 쓰고, 여러 조건은 and · or 로 잇습니다.',
       },
     ],
     describe: (s) => s.query,
   },
   missing: {
-    label: '결측치 처리', group: '정리',
+    label: '결측치 처리', group: '정리', needs: 'optional',
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       {
@@ -436,7 +469,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${s.table} · ${s.method}`,
   },
   outlier: {
-    label: '이상치 처리', group: '정리',
+    label: '이상치 처리', group: '정리', needs: 'columns',
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'columns', type: 'columns', kinds: NUM, label: '대상 숫자 열', wide: true },
@@ -453,7 +486,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${(s.columns || []).join(', ')} · ${s.method} ${s.k} · ${s.action}`,
   },
   normalize: {
-    label: '정규화 · 표준화', group: '정리',
+    label: '정규화 · 표준화', group: '정리', needs: 'columns',
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'columns', type: 'columns', kinds: NUM, label: '대상 숫자 열', wide: true },
@@ -466,7 +499,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${(s.columns || []).join(', ')} · ${s.method}`,
   },
   bin: {
-    label: '구간 나누기', group: '정리',
+    label: '구간 나누기', group: '정리', needs: 'column',
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'column', type: 'column', kinds: NUM, label: '열' },
@@ -491,7 +524,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${(s.rows || []).length}개 행`,
   },
   drop_duplicates: {
-    label: '중복 행 제거', group: '행',
+    label: '중복 행 제거', group: '행', needs: 'optional',
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'columns', type: 'columns', label: '기준 열 (비우면 전체)', wide: true },
@@ -499,18 +532,23 @@ const STEP_SCHEMAS = {
     describe: (s) => s.table,
   },
   group: {
-    label: '그룹별 요약', group: '합치기',
+    label: '그룹별 요약', group: '합치기', needs: 'columns', columnKey: 'by',
     fields: [
       { key: 'table', type: 'table', label: '원본 표' },
       { key: 'by', type: 'columns', label: '그룹 기준 열', wide: true },
-      { key: 'aggColumns', type: 'columns', kinds: NUM, label: '요약할 숫자 열', wide: true },
       { key: 'func', type: 'select', label: '요약 방법', options: () => AGG_OPTIONS },
-      { key: 'result', type: 'text', label: '결과 표 이름', default: '요약' },
+      {
+        key: 'result', type: 'text', label: '결과 표 이름', default: '요약',
+        hint: '고른 열로 묶고, 나머지 숫자 열을 모두 요약합니다.',
+      },
     ],
-    prepare: (s) => ({
-      ...s,
-      aggs: (s.aggColumns || []).map((column) => ({ column, func: s.func })),
-    }),
+    prepare: (s) => {
+      const by = s.by || [];
+      const aggColumns = columnsOf(s.table, NUM)
+        .map((column) => column.name)
+        .filter((name) => !by.includes(name));
+      return { ...s, aggColumns, aggs: aggColumns.map((column) => ({ column, func: s.func })) };
+    },
     describe: (s) => `${s.table} → ${s.result} (${(s.by || []).join(', ')} 기준)`,
   },
   concat: {
@@ -538,7 +576,7 @@ const STEP_SCHEMAS = {
     describe: (s) => `${s.left} ⨝ ${s.right} → ${s.result}`,
   },
   kmeans_label: {
-    label: '군집 번호를 열로 추가', group: '합치기',
+    label: '군집 번호를 열로 추가', group: '합치기', needs: 'columns',
     fields: [
       { key: 'table', type: 'table', label: '대상 표' },
       { key: 'columns', type: 'columns', kinds: NUM, label: '기준 숫자 열', wide: true },
@@ -560,9 +598,10 @@ function buildStepFields(container, op, values, onChange, skipKeys) {
     const holder = el('div', 'field-holder');
     const original = values.table;
     if (field.tableKey) values.table = values[field.tableKey];
-    buildFields(holder, [field], values, (next) => {
+    // structural이 false면 다른 칸에 영향이 없는 값 변경이라 다시 그리지 않는다.
+    buildFields(holder, [field], values, (next, structural) => {
       onChange(next);
-      rerender();
+      if (structural !== false) rerender();
     });
     if (field.tableKey) values.table = original;
     while (holder.firstChild) container.append(holder.firstChild);
@@ -1011,6 +1050,7 @@ function startRename(cell, label, name) {
 
 async function afterSelect() {
   renderSelectBar();
+  renderInspector();
   await renderTable();
 }
 
@@ -1227,6 +1267,9 @@ function renderInspector() {
       const button = el('button', 'op-btn');
       button.type = 'button';
       button.textContent = schema.label;
+      const needsPick = schema.needs && schema.needs !== 'optional';
+      button.disabled = Boolean(needsPick) && !state.selCols.length;
+      button.title = button.disabled ? '표에서 열을 먼저 고르세요' : '';
       button.onclick = () => openStepDialog(op, {});
       grid.append(button);
     });
@@ -1253,15 +1296,27 @@ function stepUsesTable(step, name) {
 function openStepDialog(op, preset, editId) {
   const schema = STEP_SCHEMAS[op];
   const values = { table: state.activeTable, ...JSON.parse(JSON.stringify(preset || {})) };
+  const skip = values.table ? ['table'] : [];
+  // 열은 표에서 고른 것을 쓴다. 대화상자에서 다시 고르게 하지 않는다.
+  const picked = [...state.selCols];
+  const key = schema.columnKey || (schema.needs === 'column' ? 'column' : 'columns');
+  if (!editId && schema.needs) {
+    values[key] = schema.needs === 'column' ? picked[0] : picked;
+    skip.push(key);
+  }
   openModal({
     title: schema.label,
     okLabel: editId ? '수정' : '추가',
     build: (body) => {
+      if (!editId && schema.needs) {
+        const target = picked.length ? picked.join(', ') : '표 전체';
+        body.append(el('div', 'dialog-target', `${values.table} · ${target}`));
+      }
       const form = el('div');
       form.style.display = 'flex';
       form.style.flexWrap = 'wrap';
       form.style.gap = '.7rem';
-      buildStepFields(form, op, values, () => {}, values.table ? ['table'] : []);
+      buildStepFields(form, op, values, () => {}, skip);
       body.append(form);
     },
   }).then(async (accepted) => {
