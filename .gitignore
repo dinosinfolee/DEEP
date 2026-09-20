@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+test/shot-*.png
+assets/worker.real.js
+.DS_Store
+Thumbs.db
+.claude/
+*.md

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DEEP — 브라우저에서 하는 데이터 분석</title>
+<meta name="description" content="설치도 서버도 없이 브라우저에서 CSV를 올려 전처리하고, 시각화하고, 회귀·군집·연관 분석까지 해 보는 수업용 도구.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232a78d6'/><g stroke='%23fff' stroke-width='2.6' stroke-linecap='round'><path d='M8.5 11.5h15'/><path d='M11 16.5h10'/><path d='M13.5 21.5h5'/></g></svg>">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8"/><path d="M8.5 11.5h15"/><path d="M11 16.5h10"/><path d="M13.5 21.5h5"/></svg>
+    </span>
+    <b>DEEP</b>
+  </div>
+
+  <input id="project-title" class="project-title" value="새 분석" aria-label="분석 제목" spellcheck="false">
+
+  <div class="topbar-actions">
+    <span id="autosave-mark" class="autosave">자동 저장됨</span>
+    <span id="kernel-chip" class="chip chip-wait">
+      <span class="chip-dot"></span><span id="kernel-chip-text">준비 중</span>
+    </span>
+    <button id="btn-add-data" class="btn btn-primary" type="button">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>데이터 추가
+    </button>
+    <button id="btn-save" class="btn" type="button">
+      <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h7M8 14h8v7H8z"/></svg>저장
+    </button>
+    <button id="btn-open" class="btn btn-icon" type="button" title="파일 열기">
+      <svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>
+    </button>
+    <button id="btn-share" class="btn" type="button">
+      <svg viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7M12 3v13M8 7l4-4 4 4"/></svg>공유
+    </button>
+    <button id="btn-help" class="btn btn-icon" type="button" title="도움말">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 114 2c-.9.7-1.5 1.2-1.5 2.5M12 17.5v.01"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="panel-head">
+      <span class="panel-title">데이터</span>
+      <button class="ghost-btn" id="btn-add-data-2" type="button">추가</button>
+    </div>
+    <div class="table-list" id="table-list"></div>
+    <div class="panel-head panel-head-sub">
+      <span class="panel-title" id="column-panel-title">열</span>
+      <span class="hint" id="column-count"></span>
+    </div>
+    <div class="column-list" id="column-list"></div>
+  </aside>
+
+  <main class="main">
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-view="table" role="tab">표</button>
+      <button class="tab" data-view="charts" role="tab">시각화</button>
+      <button class="tab" data-view="analysis" role="tab">분석</button>
+      <div class="tabs-right">
+        <span id="step-summary" class="hint"></span>
+        <button id="btn-export-csv" class="ghost-btn" type="button">CSV 내려받기</button>
+      </div>
+    </nav>
+
+    <section class="view" id="view-table">
+      <div class="table-scroll" id="table-scroll">
+        <div class="empty" id="table-empty">
+          <div class="empty-art">
+            <svg viewBox="0 0 24 24"><path d="M3 5h18v14H3z"/><path d="M3 9h18M9 9v10M15 9v10"/></svg>
+          </div>
+          <h2>CSV 파일을 올려 시작하세요</h2>
+          <p>여러 개를 한 번에 올려도 됩니다. 파일은 이 브라우저 밖으로 나가지 않습니다.</p>
+          <button class="btn btn-primary" id="btn-empty-add" type="button">데이터 추가</button>
+          <button class="ghost-btn" id="btn-sample" type="button">가상 데이터로 둘러보기</button>
+        </div>
+      </div>
+      <div class="table-foot" id="table-foot" hidden>
+        <button class="ghost-btn" id="page-prev" type="button">이전</button>
+        <span id="page-label" class="hint"></span>
+        <button class="ghost-btn" id="page-next" type="button">다음</button>
+      </div>
+    </section>
+
+    <section class="view" id="view-charts" hidden>
+      <div class="card-grid" id="chart-grid"></div>
+    </section>
+
+    <section class="view" id="view-analysis" hidden>
+      <div class="card-grid" id="analysis-grid"></div>
+    </section>
+  </main>
+
+  <aside class="inspector" id="inspector">
+    <div class="panel-head">
+      <span class="panel-title" id="inspector-title">전처리</span>
+    </div>
+    <div class="inspector-body" id="inspector-body"></div>
+  </aside>
+</div>
+
+<div class="boot" id="boot">
+  <div class="boot-card">
+    <div class="boot-mark">
+      <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8"/><path d="M8.5 11.5h15"/><path d="M11 16.5h10"/><path d="M13.5 21.5h5"/></svg>
+    </div>
+    <h1>DEEP</h1>
+    <div class="boot-tagline">DESCRIBE · EXPLORE · EXPLAIN · PREDICT</div>
+    <p id="boot-text">파이썬 분석 환경을 브라우저에 준비하는 중입니다…</p>
+    <div class="boot-bar"><i id="boot-bar-fill"></i></div>
+    <small>처음 한 번만 내려받습니다. 이후에는 브라우저가 기억합니다.</small>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h2 id="modal-title">설정</h2>
+      <button class="btn btn-icon" id="modal-close" type="button" aria-label="닫기">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot" id="modal-foot">
+      <button class="ghost-btn" id="modal-cancel" type="button">취소</button>
+      <button class="btn btn-primary" id="modal-ok" type="button">적용</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toast-stack"></div>
+
+<input type="file" id="file-input" accept=".csv,.tsv,.txt,text/csv" multiple hidden>
+<input type="file" id="project-input" accept=".json,application/json" hidden>
+
+<script src="vendor/plotly-cartesian.min.js"></script>
+<script src="vendor/plotly-locale-ko.js"></script>
+<script type="module" src="assets/app.js"></script>
+</body>
+</html>
