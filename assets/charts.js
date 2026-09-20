@@ -13,8 +13,8 @@ export const SERIES = [
 
 const INK = '#37352f';
 const INK_SOFT = '#5e646e';
-const MUTED = '#898781';
-const GRID = '#ececea';
+const MUTED = '#75736e';
+const GRID = '#d4d4cf';
 const AXIS = '#c9c9c5';
 const SURFACE = '#ffffff';
 const FONT = '"Pretendard Variable", Pretendard, "Noto Sans KR", system-ui, sans-serif';
