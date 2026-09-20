@@ -879,7 +879,9 @@ async function renderTable() {
       await afterSelect();
     }
   );
-  corner.append(allBox);
+  const cornerInner = el('div', 'row-index-inner');
+  cornerInner.append(allBox);
+  corner.append(cornerInner);
   headRow.append(corner);
   data.columns.forEach((name, index) => {
     const cell = el('th');
@@ -910,7 +912,8 @@ async function renderTable() {
     const tr = el('tr');
     if (picked) tr.classList.add('row-selected');
     const indexCell = el('td', 'row-index');
-    indexCell.append(
+    const indexInner = el('div', 'row-index-inner');
+    indexInner.append(
       selectBox(picked, '이 행을 선택', async (checked) => {
         state.selRows = checked
           ? [...state.selRows, position]
@@ -919,6 +922,7 @@ async function renderTable() {
       }),
       el('span', 'row-no', String(position + 1))
     );
+    indexCell.append(indexInner);
     tr.append(indexCell);
     row.forEach((value, index) => {
       const isNumber = data.kinds[index] === 'number';
@@ -1135,7 +1139,7 @@ function renderInspector() {
   // 전처리
   const tools = el('div', 'undo-row');
   const mk = (label, disabled, onClick, extra) => {
-    const button = el('button', `ghost-btn${extra ? ' ' + extra : ''}`);
+    const button = el('button', extra || null);
     button.type = 'button';
     button.textContent = label;
     button.disabled = disabled;
