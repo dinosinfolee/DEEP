@@ -44,7 +44,8 @@ async function bootPyodide() {
   const bases = (await hasLocalPyodide()) ? [LOCAL_BASE, ...CDN_BASES] : CDN_BASES;
   for (const base of bases) {
     try {
-      importScripts(`${base}pyodide.js`);
+      // ES 모듈로 불러온다. importScripts는 no-cors 요청이라 CDN이 막히는 환경이 있다.
+      const { loadPyodide } = await import(/* @vite-ignore */ `${base}pyodide.mjs`);
       const instance = await loadPyodide({ indexURL: base });
       return instance;
     } catch (error) {

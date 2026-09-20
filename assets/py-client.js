@@ -2,7 +2,7 @@
 
 export class Kernel {
   constructor(onStatus) {
-    this.worker = new Worker(new URL('./worker.js', import.meta.url));
+    this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     this.pending = new Map();
     this.nextId = 1;
     this.onStatus = onStatus || (() => {});
