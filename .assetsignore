@@ -1,9 +1,0 @@
-# 배포에서 뺄 것들. 사이트 동작과 상관없는 개발용 파일이다.
-# _headers 는 여기 넣지 말 것 — 파일로 서빙되지는 않지만 캐시 규칙으로 읽힌다.
-wrangler.jsonc
-.assetsignore
-.gitignore
-.git
-test
-tools
-__pycache__
