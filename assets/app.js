@@ -34,6 +34,9 @@ const state = {
   loading: false,
   cols: [],
   kinds: [],
+  visIdx: [],
+  hiddenCols: [],
+  openFacts: [],
   page: 0,
   pendingRecipe: null,
 };
@@ -833,9 +836,27 @@ function renderSidebar() {
   if (!meta) return;
   meta.columns.forEach((column) => {
     const row = el('div', 'column-row');
+    const hidden = state.hiddenCols.includes(column.name);
+    if (hidden) row.classList.add('column-hidden');
+    const eye = el('button', 'column-eye');
+    eye.type = 'button';
+    eye.title = hidden ? '표에 다시 보이기' : '표에서 숨기기';
+    eye.innerHTML = (hidden ? EYE_OFF : EYE_ON).split('|').map((d) => icon(d)).join('');
+    eye.onclick = async (event) => {
+      event.stopPropagation();
+      state.hiddenCols = hidden
+        ? state.hiddenCols.filter((name) => name !== column.name)
+        : [...state.hiddenCols, column.name];
+      // 숨긴 열은 고른 상태도 푼다. 보이지 않는 열에 처리를 거는 일을 막는다.
+      state.selCols = state.selCols.filter((name) => !state.hiddenCols.includes(name));
+      renderSidebar();
+      renderInspector();
+      renderSelectBar();
+      await renderTable();
+    };
     const tag = el('span', `kind-tag kind-${column.kind}`, kindLetter(column.kind));
     tag.title = kindName(column.kind);
-    row.append(tag, el('span', 'column-name', column.name));
+    row.append(eye, tag, el('span', 'column-name', column.name));
     const flags = el('div', 'column-flags');
     if (column.missing) flags.append(el('span', 'flag flag-missing', `결측 ${column.missing}`));
     if (column.outliers) flags.append(el('span', 'flag flag-outlier', `이상 ${column.outliers}`));
@@ -849,6 +870,9 @@ function renderSidebar() {
     columns.append(row);
   });
 }
+
+const EYE_ON = 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z|M12 15a3 3 0 100-6 3 3 0 000 6z';
+const EYE_OFF = 'M4 4l16 16|M9.9 5.2A9.8 9.8 0 0112 5c6.5 0 10 6 10 6a16 16 0 01-3.3 3.9M6.3 7.3A16 16 0 002 11s3.5 6 10 6c1.2 0 2.3-.2 3.3-.5';
 
 const kindLetter = (kind) => ({ number: '#', text: 'A', datetime: '⏱', bool: '✓' }[kind] || '?');
 const kindName = (kind) => ({ number: '숫자', text: '문자', datetime: '날짜', bool: '참/거짓' }[kind] || kind);
@@ -898,6 +922,7 @@ async function renderTable() {
   if (state.selTable !== state.activeTable) {
     state.selCols = [];
     state.selRows = [];
+    state.hiddenCols = [];
     state.selTable = state.activeTable;
   }
   if (!state.activeTable) {
@@ -912,8 +937,11 @@ async function renderTable() {
   const data = await run(kernel.preview(state.activeTable, 0, CHUNK), '표 읽기');
   state.total = data.total;
   state.loaded = 0;
-  state.cols = data.columns;
-  state.kinds = data.kinds;
+  state.visIdx = data.columns
+    .map((name, index) => index)
+    .filter((index) => !state.hiddenCols.includes(data.columns[index]));
+  state.cols = state.visIdx.map((index) => data.columns[index]);
+  state.kinds = state.visIdx.map((index) => data.kinds[index]);
   const table = el('table', 'grid');
   const head = el('thead');
   const headRow = el('tr');
@@ -930,7 +958,8 @@ async function renderTable() {
   cornerInner.append(allBox, el('span', 'row-no', '번호'));
   corner.append(cornerInner);
   headRow.append(corner);
-  data.columns.forEach((name, index) => {
+  state.visIdx.forEach((index) => {
+    const name = data.columns[index];
     const cell = el('th');
     const picked = state.selCols.includes(name);
     if (picked) cell.classList.add('col-selected');
@@ -989,7 +1018,8 @@ function appendRows(body, data) {
     );
     indexCell.append(indexInner);
     tr.append(indexCell);
-    row.forEach((value, index) => {
+    state.visIdx.forEach((index) => {
+      const value = row[index];
       const isNumber = data.kinds[index] === 'number';
       const empty = value === null || value === undefined || value === '';
       const cell = tdCell(
@@ -1314,12 +1344,6 @@ function renderInspector() {
 
 function renderExplore(body, meta) {
   body.append(tableSummary(meta));
-  const findings = diagnose(meta);
-  body.append(
-    el('div', findings.length ? 'callout callout-warn' : 'callout callout-ok', findings.length
-      ? `전처리에서 다룰 것이 ${findings.length}가지 있습니다. 위쪽 '2 전처리'에서 하나씩 처리할 수 있습니다.`
-      : '눈에 띄는 문제가 없습니다. 바로 시각화로 넘어가도 좋습니다.')
-  );
   body.append(columnProfile(meta, false));
 }
 
@@ -1337,10 +1361,94 @@ function tableSummary(meta) {
     kinds.append(el('span', 'summary-kind', `${kindName(kind)} ${count}`));
   });
   box.append(kinds);
+
+  const groups = factGroups(meta);
+  const toggles = el('div', 'fact-toggles');
+  groups.forEach((group) => {
+    const open = state.openFacts.includes(group.key);
+    if (!group.count) {
+      const chip = el('button', 'fact-toggle none');
+      chip.type = 'button';
+      chip.disabled = true;
+      chip.append(el('span', null, `${group.label} 없음`));
+      toggles.append(chip);
+      return;
+    }
+    const chip = el('button', `fact-toggle${open ? ' on' : ''}`);
+    chip.type = 'button';
+    chip.append(el('span', null, group.label), el('b', null, String(group.count)), el('span', null, open ? '▴' : '▾'));
+    chip.onclick = () => {
+      state.openFacts = open
+        ? state.openFacts.filter((key) => key !== group.key)
+        : [...state.openFacts, group.key];
+      renderInspector();
+    };
+    toggles.append(chip);
+  });
+  box.append(toggles);
+
+  groups.forEach((group) => {
+    if (!group.count || !state.openFacts.includes(group.key)) return;
+    const panel = el('div', 'fact-panel');
+    panel.append(el('div', 'fact-note', group.note));
+    group.rows.forEach((row) => {
+      const line = el('div', 'fact-row');
+      line.append(el('span', 'fact-col', row.label), el('span', 'fact-num', row.amount));
+      if (row.what) {
+        const look = el('button');
+        look.type = 'button';
+        look.textContent = '보기';
+        look.onclick = () => revealCells(meta.name, row.label, row.what, look);
+        line.append(look);
+      }
+      panel.append(line);
+    });
+    box.append(panel);
+  });
+
   return box;
 }
 
-/* ------------------------------------------------- 2 다듬기 */
+/* 요약에서 펼쳐 보는 묶음. 무엇인지 설명하고, 어느 열에 몇 개인지 보여준다. */
+function factGroups(meta) {
+  const missing = meta.columns.filter((column) => column.missing > 0);
+  const outlier = meta.columns.filter((column) => column.outliers > 0);
+  const typed = meta.columns.filter((column) => column.numericLike);
+  return [
+    {
+      key: 'missing', label: '결측값', count: missing.length,
+      note: '값이 비어 있는 칸입니다. 평균이나 중앙값으로 채울 수도, 그 행을 빼고 분석할 수도 있습니다. 어느 쪽을 고르느냐에 따라 결과가 달라지니, 왜 비어 있는지부터 생각해 보세요.',
+      rows: missing.map((column) => ({
+        label: column.name,
+        amount: `${numberFormat.format(column.missing)}개 · ${(column.missingRatio * 100).toFixed(1)}%`,
+        what: 'missing',
+      })),
+    },
+    {
+      key: 'outlier', label: '이상치', count: outlier.length,
+      note: '사분위수 범위(IQR)에서 크게 벗어난 값입니다. 잘못 입력된 값일 수도 있고, 실제로 특별한 경우일 수도 있습니다. 지우기 전에 어떤 행인지 반드시 확인하세요.',
+      rows: outlier.map((column) => ({
+        label: column.name,
+        amount: `${numberFormat.format(column.outliers)}개`,
+        what: 'outlier',
+      })),
+    },
+    {
+      key: 'type', label: '자료형 확인', count: typed.length,
+      note: '숫자처럼 보이는데 문자로 읽힌 열입니다. 이대로 두면 평균을 내거나 그래프를 그릴 수 없습니다. 다만 학번·코드처럼 계산하지 않는 값이라면 문자로 두는 편이 맞습니다.',
+      rows: typed.map((column) => ({ label: column.name, amount: '문자로 읽힘' })),
+    },
+    {
+      key: 'duplicated', label: '중복 행', count: meta.duplicated ? 1 : 0,
+      note: '모든 값이 똑같은 행입니다. 같은 자료가 두 번 들어갔을 수 있습니다.',
+      rows: meta.duplicated
+        ? [{ label: '표 전체', amount: `${numberFormat.format(meta.duplicated)}행` }]
+        : [],
+    },
+  ];
+}
+
+/* ------------------------------------------------- 2 전처리 */
 
 function renderClean(body, meta) {
   const tools = el('div', 'undo-row');
