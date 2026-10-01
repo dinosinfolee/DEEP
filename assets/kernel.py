@@ -675,6 +675,29 @@ def cmd_preview(payload):
     }
 
 
+def cmd_locate(payload):
+    """눈으로 확인할 행이 몇 번째인지 돌려준다. 표를 바꾸지는 않는다."""
+    name = payload["table"]
+    frame = get_table(name)
+    column = payload["column"]
+    if column not in frame.columns:
+        raise KernelError(f"'{column}' 열이 없습니다.")
+    series = frame[column]
+    what = payload.get("what", "outlier")
+    if what == "missing":
+        mask = series.isna()
+    else:
+        numeric = pd.to_numeric(series, errors="coerce")
+        q1 = numeric.quantile(0.25)
+        q3 = numeric.quantile(0.75)
+        iqr = q3 - q1
+        mask = (numeric < q1 - 1.5 * iqr) | (numeric > q3 + 1.5 * iqr)
+    mask = mask.fillna(False).to_numpy()
+    positions = [index for index, flag in enumerate(mask) if flag]
+    # 화면에서 쓸 만큼만. 수천 개를 보내도 다 표시하지 못한다.
+    return {"positions": positions[:300], "count": len(positions)}
+
+
 def cmd_export_csv(payload):
     frame = get_table(payload["table"])
     return {"text": frame.to_csv(index=False)}
@@ -1338,6 +1361,7 @@ COMMANDS = {
     "chart_data": cmd_chart_data,
     "analyze": cmd_analyze,
     "export_csv": cmd_export_csv,
+    "locate": cmd_locate,
 }
 
 

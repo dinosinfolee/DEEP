@@ -28,11 +28,18 @@ const state = {
   analyses: [],
   problems: [],
   view: 'explore',
+  zoom: 100,
+  loaded: 0,
+  total: 0,
+  loading: false,
+  cols: [],
+  kinds: [],
   page: 0,
   pendingRecipe: null,
 };
 
-const PAGE_SIZE = 50;
+/* 쪽을 나누지 않는다. 스크롤이 바닥에 가까워지면 이만큼씩 이어 붙인다. */
+const CHUNK = 200;
 let kernel = null;
 let busyCount = 0;
 
@@ -101,7 +108,11 @@ const fmt = (value, digits = 4) => {
   if (value === null || value === undefined || Number.isNaN(value)) return '—';
   if (typeof value !== 'number') return String(value);
   if (!Number.isFinite(value)) return '—';
-  if (Math.abs(value) >= 1e6 || (Math.abs(value) < 1e-4 && value !== 0)) return value.toExponential(2);
+  const size = Math.abs(value);
+  // 지수 표기는 자릿수가 정말 많을 때와 아주 작은 값에만. 교육청코드·인구처럼 큰 정수는
+  // 7.24e+6이 아니라 7,240,000으로 읽혀야 한다.
+  if (size >= 1e15 || (size < 1e-4 && value !== 0)) return value.toExponential(2);
+  if (Number.isInteger(value)) return numberFormat.format(value);
   return numberFormat.format(Number(value.toFixed(digits)));
 };
 const pct = (value) => (value === null || value === undefined ? '—' : `${(value * 100).toFixed(1)}%`);
@@ -807,7 +818,6 @@ function renderSidebar() {
     }
     item.onclick = () => {
       state.activeTable = table.name;
-      state.page = 0;
       renderSidebar();
       renderTable();
       renderInspector();
@@ -899,27 +909,25 @@ async function renderTable() {
     }
     return;
   }
-  const data = await run(
-    kernel.preview(state.activeTable, state.page * PAGE_SIZE, PAGE_SIZE),
-    '표 읽기'
-  );
+  const data = await run(kernel.preview(state.activeTable, 0, CHUNK), '표 읽기');
+  state.total = data.total;
+  state.loaded = 0;
+  state.cols = data.columns;
+  state.kinds = data.kinds;
   const table = el('table', 'grid');
   const head = el('thead');
   const headRow = el('tr');
   const corner = el('th', 'row-index');
-  const pagePositions = data.rows.map((_, i) => data.offset + i);
   const allBox = selectBox(
-    pagePositions.length > 0 && pagePositions.every((i) => state.selRows.includes(i)),
-    '이 쪽의 행을 모두 선택',
+    state.total > 0 && state.selRows.length === state.total,
+    '모든 행 선택',
     async (checked) => {
-      state.selRows = checked
-        ? [...new Set([...state.selRows, ...pagePositions])]
-        : state.selRows.filter((i) => !pagePositions.includes(i));
+      state.selRows = checked ? Array.from({ length: state.total }, (_, i) => i) : [];
       await afterSelect();
     }
   );
   const cornerInner = el('div', 'row-index-inner');
-  cornerInner.append(allBox);
+  cornerInner.append(allBox, el('span', 'row-no', '번호'));
   corner.append(cornerInner);
   headRow.append(corner);
   data.columns.forEach((name, index) => {
@@ -950,10 +958,23 @@ async function renderTable() {
   table.append(head);
 
   const body = el('tbody');
+  appendRows(body, data);
+  table.append(body);
+  scroll.innerHTML = '';
+  scroll.append(table);
+
+  scroll.scrollTop = 0;
+  updateTableFoot();
+  renderSelectBar();
+}
+
+/* 한 묶음을 tbody 끝에 붙인다. 첫 그리기와 이어 불러오기가 같은 길을 쓴다. */
+function appendRows(body, data) {
   data.rows.forEach((row, rowIndex) => {
     const position = data.offset + rowIndex;
     const picked = state.selRows.includes(position);
     const tr = el('tr');
+    tr.dataset.pos = String(position);
     if (picked) tr.classList.add('row-selected');
     const indexCell = el('td', 'row-index');
     const indexInner = el('div', 'row-index-inner');
@@ -980,16 +1001,59 @@ async function renderTable() {
     });
     body.append(tr);
   });
-  table.append(body);
-  scroll.innerHTML = '';
-  scroll.append(table);
+  state.loaded = data.offset + data.rows.length;
+}
 
-  const pages = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
-  foot.hidden = pages <= 1;
-  $('#page-label').textContent = `${state.page + 1} / ${pages} 쪽 · 전체 ${numberFormat.format(data.total)}행`;
-  $('#page-prev').disabled = state.page === 0;
-  $('#page-next').disabled = state.page >= pages - 1;
-  renderSelectBar();
+async function loadMoreRows() {
+  if (state.loading || !state.activeTable) return;
+  if (state.loaded >= state.total) return;
+  const body = document.querySelector('#table-scroll table.grid tbody');
+  if (!body) return;
+  state.loading = true;
+  try {
+    const data = await kernel.preview(state.activeTable, state.loaded, CHUNK);
+    appendRows(body, data);
+    updateTableFoot();
+  } catch (error) {
+    toast(`표를 더 읽지 못했습니다. ${error.message}`, 'error');
+  } finally {
+    state.loading = false;
+  }
+}
+
+function updateTableFoot() {
+  const foot = $('#table-foot');
+  foot.hidden = !state.total;
+  $('#page-label').textContent = state.loaded >= state.total
+    ? `전체 ${numberFormat.format(state.total)}행`
+    : `${numberFormat.format(state.loaded)} / ${numberFormat.format(state.total)}행 · 내리면 더 보입니다`;
+}
+
+/* 고른 것이 바뀌었다고 표를 통째로 다시 그리면 스크롤과 이어 불러온 행이 날아간다.
+   이미 그려진 칸의 표시만 바꾼다. */
+function paintSelection() {
+  const table = document.querySelector('#table-scroll table.grid');
+  if (!table) return;
+  const cols = state.cols;
+  table.querySelectorAll('thead th').forEach((th, index) => {
+    if (index === 0) return;
+    const on = state.selCols.includes(cols[index - 1]);
+    th.classList.toggle('col-selected', on);
+    const box = th.querySelector('.sel-box');
+    if (box) box.checked = on;
+  });
+  const head = table.querySelector('thead .sel-box');
+  if (head) head.checked = state.total > 0 && state.selRows.length === state.total;
+  table.querySelectorAll('tbody tr').forEach((tr) => {
+    const on = state.selRows.includes(Number(tr.dataset.pos));
+    tr.classList.toggle('row-selected', on);
+    const box = tr.querySelector('.sel-box');
+    if (box) box.checked = on;
+    [...tr.children].forEach((cell, index) => {
+      if (index === 0) return;
+      cell.classList.toggle('col-selected', state.selCols.includes(cols[index - 1]));
+    });
+  });
 }
 
 function thCell(text, className) {
@@ -1051,7 +1115,7 @@ function startRename(cell, label, name) {
 async function afterSelect() {
   renderSelectBar();
   renderInspector();
-  await renderTable();
+  paintSelection();
 }
 
 function sortStepFor(name) {
@@ -1194,7 +1258,7 @@ function buildEmpty() {
 
 function renderInspector() {
   const title = {
-    explore: '살펴보기', clean: '다듬기', charts: '그래프 추가', analysis: '분석 추가',
+    explore: '프로파일링', clean: '전처리', charts: '그래프 추가', analysis: '분석 추가',
   }[state.view];
   $('#inspector-title').textContent = title;
   const body = $('#inspector-body');
@@ -1253,7 +1317,7 @@ function renderExplore(body, meta) {
   const findings = diagnose(meta);
   body.append(
     el('div', findings.length ? 'callout callout-warn' : 'callout callout-ok', findings.length
-      ? `다듬기 전에 살펴볼 것이 ${findings.length}가지 있습니다. 위쪽 '2 다듬기'에서 하나씩 처리할 수 있습니다.`
+      ? `전처리에서 다룰 것이 ${findings.length}가지 있습니다. 위쪽 '2 전처리'에서 하나씩 처리할 수 있습니다.`
       : '눈에 띄는 문제가 없습니다. 바로 시각화로 넘어가도 좋습니다.')
   );
   body.append(columnProfile(meta, false));
@@ -1363,6 +1427,7 @@ function findingCard(meta, finding) {
     info.append(el('div', 'finding-fact',
       `${numberFormat.format(column.missing)}개 비어 있음 · 전체의 ${(column.missingRatio * 100).toFixed(1)}%`));
     info.append(miniBar(column.missingRatio));
+    acts.append(lookButton(meta.name, column.name, 'missing'));
     if (column.kind === 'number') {
       add('평균으로 채우기', { op: 'missing', method: 'mean', columns: [column.name] });
       add('중앙값으로 채우기', { op: 'missing', method: 'median', columns: [column.name] });
@@ -1376,12 +1441,7 @@ function findingCard(meta, finding) {
     info.append(el('div', 'finding-fact', `${column.outliers}개가 보통 범위를 벗어남 · IQR 기준`));
     info.append(el('div', 'finding-fact hint',
       `가장 작은 값 ${fmt(column.min)} · 중앙값 ${fmt(column.median)} · 가장 큰 값 ${fmt(column.max)}`));
-    const look = el('button', 'finding-btn');
-    look.type = 'button';
-    look.textContent = '표에서 보기';
-    look.title = '이 열을 큰 값부터 정렬해 눈으로 확인합니다';
-    look.onclick = () => sortDescending(meta.name, column.name);
-    acts.append(look);
+    acts.append(lookButton(meta.name, column.name, 'outlier'));
     add('경계값으로 자르기', { op: 'outlier', columns: [column.name], method: 'iqr', k: 1.5, action: 'clip' });
     add('해당 행 삭제', { op: 'outlier', columns: [column.name], method: 'iqr', k: 1.5, action: 'remove' }, 'danger');
   } else if (finding.type === 'duplicated') {
@@ -1408,38 +1468,120 @@ function miniBar(ratio) {
   return wrap;
 }
 
-/* 이상치를 눈으로 보도록 그 열을 큰 값부터 정렬한다. */
-async function sortDescending(name, column) {
-  state.steps = state.steps.filter((step) => !(step.op === 'sort' && step.table === name));
-  state.steps.push({ id: uid(), op: 'sort', table: name, by: [column], ascending: [false] });
-  state.redo = [];
-  await rebuildAll();
+function lookButton(table, column, what) {
+  const button = el('button', 'finding-btn');
+  button.type = 'button';
+  button.textContent = '표에서 보기';
+  button.title = '해당 칸으로 내려가 잠깐 표시해 줍니다';
+  button.onclick = () => revealCells(table, column, what, button);
+  return button;
+}
+
+/* 문제가 있는 칸으로 표를 내리고 잠깐 강조한다. 데이터는 건드리지 않는다. */
+async function revealCells(table, column, what, button) {
+  if (state.activeTable !== table) {
+    state.activeTable = table;
+    renderSidebar();
+    await renderTable();
+  }
+  let found;
+  try {
+    button.disabled = true;
+    found = await kernel.locate(table, column, what);
+  } catch (error) {
+    toast(`위치를 찾지 못했습니다. ${error.message}`, 'error');
+    return;
+  } finally {
+    button.disabled = false;
+  }
+  if (!found.positions.length) {
+    toast('해당하는 칸이 없습니다.');
+    return;
+  }
+
+  // 아직 안 불러온 구간이면 그 자리까지 이어 불러온다.
+  const target = found.positions[0];
+  let guard = 0;
+  while (state.loaded <= target && state.loaded < state.total && guard < 200) {
+    await loadMoreRows();
+    guard += 1;
+  }
+
+  const index = state.cols.indexOf(column);
+  if (index === -1) return;
+  const rows = document.querySelectorAll('#table-scroll table.grid tbody tr');
+  const marked = [];
+  rows.forEach((row) => {
+    if (!found.positions.includes(Number(row.dataset.pos))) return;
+    const cell = row.children[index + 1];
+    if (cell) marked.push(cell);
+  });
+  if (!marked.length) return;
+
+  // 부드러운 스크롤은 창이 가려져 있을 때 안 움직이는 경우가 있어 즉시 이동으로 둔다.
+  marked[0].scrollIntoView({ block: 'center' });
+  marked.forEach((cell) => cell.classList.add('cell-flash'));
+  setTimeout(() => marked.forEach((cell) => cell.classList.remove('cell-flash')), 2400);
+  const more = found.count > marked.length ? ` (화면에 보이는 ${marked.length}개 표시)` : '';
+  toast(`${column}에서 ${found.count}개 찾았습니다.${more}`);
 }
 
 /* ------------------------------------------------- 열 프로필 */
 
 function columnProfile(meta, withActions) {
   const box = el('div', 'profile');
-  box.append(el('div', 'section-label', '열 프로필'));
-  const picked = state.selCols.length === 1
-    ? meta.columns.find((column) => column.name === state.selCols[0])
-    : null;
-  if (!picked) {
-    box.append(el('div', 'empty-note', state.selCols.length > 1
-      ? '열을 하나만 고르면 그 열을 자세히 보여줍니다.'
-      : '표에서 열 제목의 네모를 누르면 그 열을 자세히 보여줍니다.'));
+  const picked = meta.columns.filter((column) => state.selCols.includes(column.name));
+
+  box.append(el('div', 'section-label',
+    picked.length > 1 ? `열 프로필 ${picked.length}개` : '열 프로필'));
+
+  if (!picked.length) {
+    box.append(el('div', 'empty-note', '표에서 열 제목의 네모를 누르면 그 열을 자세히 보여줍니다. 여러 개를 고르면 나란히 비교합니다.'));
     return box;
   }
 
+  picked.forEach((column) => box.append(profileCard(column)));
+
+  if (withActions) {
+    const numeric = picked.every((column) => column.kind === 'number');
+    let ops;
+    if (picked.length === 1) {
+      ops = picked[0].kind === 'number'
+        ? ['bin', 'normalize', 'outlier', 'missing', 'change_type']
+        : ['change_type', 'missing'];
+    } else {
+      // 여러 열에 한꺼번에 걸 수 있는 것만. 구간 나누기·자료형 변경은 열 하나를 받는다.
+      ops = numeric ? ['normalize', 'outlier', 'missing'] : ['missing'];
+    }
+    box.append(el('div', 'section-label',
+      picked.length > 1 ? `고른 열 ${picked.length}개에 할 수 있는 일` : '이 열에 할 수 있는 일'));
+    const grid = el('div', 'op-grid');
+    ops.forEach((op) => {
+      const button = el('button', 'op-btn');
+      button.type = 'button';
+      button.textContent = STEP_SCHEMAS[op].label;
+      button.onclick = () => openStepDialog(op, {});
+      grid.append(button);
+    });
+    box.append(grid);
+    if (picked.length > 1 && !numeric) {
+      box.append(el('div', 'hint', '숫자 열만 고르면 정규화·이상치 처리도 함께 할 수 있습니다.'));
+    }
+  }
+
+  return box;
+}
+
+function profileCard(column) {
   const card = el('div', 'profile-card');
   const head = el('div', 'profile-head');
-  head.append(el('span', 'profile-name', picked.name), el('span', 'profile-kind', kindName(picked.kind)));
+  head.append(el('span', 'profile-name', column.name), el('span', 'profile-kind', kindName(column.kind)));
   card.append(head);
 
-  if (picked.hist && picked.hist.length) {
-    const top = Math.max(...picked.hist);
+  if (column.hist && column.hist.length) {
+    const top = Math.max(...column.hist);
     const spark = el('div', 'spark');
-    picked.hist.forEach((count) => {
+    column.hist.forEach((count) => {
       const bar = el('i');
       bar.style.height = `${top ? Math.max(3, (count / top) * 100) : 3}%`;
       bar.title = `${count}개`;
@@ -1447,17 +1589,17 @@ function columnProfile(meta, withActions) {
     });
     card.append(spark);
     const ends = el('div', 'spark-ends');
-    ends.append(el('span', null, fmt(picked.min)), el('span', null, fmt(picked.max)));
+    ends.append(el('span', null, fmt(column.min)), el('span', null, fmt(column.max)));
     card.append(ends);
   }
 
   const rows = [];
-  if (picked.kind === 'number') {
-    rows.push(['평균', fmt(picked.mean)], ['중앙값', fmt(picked.median)],
-      ['표준편차', fmt(picked.std)], ['최소 · 최대', `${fmt(picked.min)} ~ ${fmt(picked.max)}`]);
+  if (column.kind === 'number') {
+    rows.push(['평균', fmt(column.mean)], ['중앙값', fmt(column.median)],
+      ['표준편차', fmt(column.std)], ['최소 · 최대', `${fmt(column.min)} ~ ${fmt(column.max)}`]);
   }
-  rows.push(['결측', `${picked.missing}개`], ['고유값', `${numberFormat.format(picked.unique)}개`]);
-  if (picked.outliers) rows.push(['이상치', `${picked.outliers}개`]);
+  rows.push(['결측', `${column.missing}개`], ['고유값', `${numberFormat.format(column.unique)}개`]);
+  if (column.outliers) rows.push(['이상치', `${column.outliers}개`]);
   const list = el('div', 'profile-stats');
   rows.forEach(([label, value]) => {
     const row = el('div', 'profile-stat');
@@ -1466,10 +1608,10 @@ function columnProfile(meta, withActions) {
   });
   card.append(list);
 
-  if (picked.top && picked.top.length) {
+  if (column.top && column.top.length) {
     card.append(el('div', 'profile-sub', '많이 나온 값'));
     const tops = el('div', 'profile-tops');
-    picked.top.forEach((item) => {
+    column.top.forEach((item) => {
       const row = el('div', 'profile-top');
       row.append(el('span', null, item.value), el('b', null, `${item.count}개`));
       tops.append(row);
@@ -1477,24 +1619,7 @@ function columnProfile(meta, withActions) {
     card.append(tops);
   }
 
-  if (withActions) {
-    const ops = picked.kind === 'number'
-      ? ['bin', 'normalize', 'outlier', 'missing', 'change_type']
-      : ['change_type', 'missing'];
-    card.append(el('div', 'profile-sub', '이 열에 할 수 있는 일'));
-    const grid = el('div', 'op-grid profile-ops');
-    ops.forEach((op) => {
-      const button = el('button', 'op-btn');
-      button.type = 'button';
-      button.textContent = STEP_SCHEMAS[op].label;
-      button.onclick = () => openStepDialog(op, {});
-      grid.append(button);
-    });
-    card.append(grid);
-  }
-
-  box.append(card);
-  return box;
+  return card;
 }
 
 function toolButton(path, title, run) {
@@ -2137,6 +2262,61 @@ function interpretR(r) {
 
 /* ------------------------------------------------------- 화면 전환 */
 
+/* ------------------------------------------------------- 화면 배율 */
+
+/* 교실 빔프로젝터로 띄우면 기본 크기가 작다. 배율을 바꿔도 글자만 커지는 게 아니라
+   표·패널 너비까지 같이 늘도록 zoom을 쓴다. 고른 배율은 이 브라우저에 기억해 둔다. */
+
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 200;
+const ZOOM_STEP = 10;
+const ZOOM_KEY = 'deep.zoom';
+
+function readZoom() {
+  try {
+    const saved = Number(localStorage.getItem(ZOOM_KEY));
+    if (Number.isFinite(saved) && saved >= ZOOM_MIN && saved <= ZOOM_MAX) return saved;
+  } catch (error) {
+    // 사생활 보호 모드 등에서 막힐 수 있다. 기본값으로 간다.
+  }
+  return 100;
+}
+
+function applyZoom(percent, remember = true) {
+  const value = Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, percent)) / 5) * 5;
+  state.zoom = value;
+  document.body.style.zoom = value === 100 ? '' : String(value / 100);
+  const box = $('#zoom-value');
+  if (box && document.activeElement !== box) box.value = String(value);
+  $('#zoom-out').disabled = value <= ZOOM_MIN;
+  $('#zoom-in').disabled = value >= ZOOM_MAX;
+  if (remember) {
+    try { localStorage.setItem(ZOOM_KEY, String(value)); } catch (error) { /* 무시 */ }
+  }
+  // Plotly는 창 크기가 바뀔 때만 다시 그린다. 배율도 같은 취급을 해준다.
+  window.dispatchEvent(new Event('resize'));
+  return value;
+}
+
+function wireZoom() {
+  $('#zoom-out').onclick = () => applyZoom(state.zoom - ZOOM_STEP);
+  $('#zoom-in').onclick = () => applyZoom(state.zoom + ZOOM_STEP);
+  const box = $('#zoom-value');
+  const commit = () => {
+    const typed = parseInt(box.value.replace(/[^0-9]/g, ''), 10);
+    box.value = String(applyZoom(Number.isFinite(typed) ? typed : state.zoom));
+  };
+  box.onkeydown = (event) => {
+    if (event.key === 'Enter') { commit(); box.blur(); }
+    if (event.key === 'Escape') { box.value = String(state.zoom); box.blur(); }
+    if (event.key === 'ArrowUp') { event.preventDefault(); applyZoom(state.zoom + ZOOM_STEP); }
+    if (event.key === 'ArrowDown') { event.preventDefault(); applyZoom(state.zoom - ZOOM_STEP); }
+  };
+  box.onblur = commit;
+  box.onfocus = () => box.select();
+  applyZoom(readZoom(), false);
+}
+
 function switchView(view) {
   state.view = view;
   document.querySelectorAll('.tab').forEach((tab) => {
@@ -2177,7 +2357,6 @@ async function addFiles(fileList) {
       setBusy(-1);
     }
   }
-  state.page = 0;
   await rebuildAll();
   if (state.pendingRecipe) await tryRunPendingRecipe();
 }
@@ -2286,7 +2465,6 @@ async function applyPayload(payload) {
     autosaveOn = true;
   }
 
-  state.page = 0;
   await rebuildAll();
   renderCharts();
   renderAnalyses();
@@ -2592,8 +2770,11 @@ function wireEvents() {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
-  $('#page-prev').onclick = () => { state.page -= 1; renderTable(); };
-  $('#page-next').onclick = () => { state.page += 1; renderTable(); };
+  // 바닥 가까이 내려오면 다음 묶음을 이어 붙인다.
+  $('#table-scroll').addEventListener('scroll', () => {
+    const box = $('#table-scroll');
+    if (box.scrollTop + box.clientHeight >= box.scrollHeight - 400) loadMoreRows();
+  });
 
   $('#modal-close').onclick = () => closeModal(false);
   $('#modal-cancel').onclick = () => closeModal(false);
@@ -2633,6 +2814,7 @@ const BOOT_STEPS = { pyodide: [25, '파이썬 실행기를 내려받는 중'], p
 
 async function main() {
   wireEvents();
+  wireZoom();
   switchView('explore');
 
   kernel = new Kernel((stage, detail) => {

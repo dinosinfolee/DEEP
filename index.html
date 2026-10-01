@@ -24,6 +24,12 @@
 
   <div class="topbar-actions">
     <span id="autosave-mark" class="autosave">자동 저장됨</span>
+    <div class="zoom" role="group" aria-label="화면 배율">
+      <button id="zoom-out" type="button" title="축소">&#8722;</button>
+      <input id="zoom-value" type="text" inputmode="numeric" value="100" aria-label="화면 배율 (%)">
+      <span class="zoom-unit">%</span>
+      <button id="zoom-in" type="button" title="확대">&#43;</button>
+    </div>
     <span id="kernel-chip" class="chip chip-wait">
       <span class="chip-dot"></span><span id="kernel-chip-text">준비 중</span>
     </span>
@@ -61,8 +67,8 @@
 
   <main class="main">
     <nav class="tabs" role="tablist">
-      <button class="tab active" data-view="explore" role="tab"><b>1</b> 살펴보기</button>
-      <button class="tab" data-view="clean" role="tab"><b>2</b> 다듬기</button>
+      <button class="tab active" data-view="explore" role="tab"><b>1</b> 프로파일링</button>
+      <button class="tab" data-view="clean" role="tab"><b>2</b> 전처리</button>
       <button class="tab" data-view="charts" role="tab"><b>3</b> 시각화</button>
       <button class="tab" data-view="analysis" role="tab"><b>4</b> 분석</button>
       <div class="tabs-right">
@@ -86,9 +92,7 @@
         </div>
       </div>
       <div class="table-foot" id="table-foot" hidden>
-        <button class="ghost-btn" id="page-prev" type="button">이전</button>
         <span id="page-label" class="hint"></span>
-        <button class="ghost-btn" id="page-next" type="button">다음</button>
       </div>
     </section>
 

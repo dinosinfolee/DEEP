@@ -67,6 +67,11 @@ export class Kernel {
   exportCsv(table) {
     return this.call('export_csv', { table });
   }
+
+  /* 결측값·이상치가 몇 번째 행에 있는지. 표를 바꾸지 않고 묻기만 한다. */
+  locate(table, column, what) {
+    return this.call('locate', { table, column, what });
+  }
 }
 
 /* CSV 파일 읽기 — 공공데이터는 CP949(EUC-KR)로 내려오는 경우가 많아

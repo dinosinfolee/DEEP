@@ -332,6 +332,8 @@ table.grid td.na { color: #b9b9b5; }
 .sel-box { width: .9rem; height: .9rem; margin: 0; accent-color: var(--accent); cursor: pointer; flex: none; }
 
 table.grid th.row-index, table.grid td.row-index { width: 1px; white-space: nowrap; padding: .4rem .5rem; }
+/* 왼쪽 위 모서리는 가로로도 세로로도 고정돼야 해서 둘보다 위에 둔다. */
+table.grid thead th.row-index { z-index: 3; }
 .row-index-inner { display: flex; align-items: center; gap: .4rem; }
 .row-no { color: var(--ink-muted); font-variant-numeric: tabular-nums; }
 
@@ -450,3 +452,32 @@ table.grid tr.row-selected td { background: var(--accent-soft); }
 .profile-top { display: flex; justify-content: space-between; gap: .5rem; font-size: .75rem; color: var(--ink-soft); }
 .profile-top b { font-weight: 650; color: var(--ink); }
 .profile-ops { margin-top: .1rem; }
+
+/* ------------------------------------------------------- 화면 배율 */
+
+.zoom {
+  display: inline-flex; align-items: center; gap: .1rem;
+  height: 2.1rem; padding: 0 .2rem;
+  border: 1px solid var(--line-strong); border-radius: .5rem; background: #fff;
+}
+.zoom button {
+  width: 1.6rem; height: 1.7rem; border: 0; border-radius: .35rem;
+  background: transparent; color: var(--ink-soft);
+  font-size: .95rem; font-weight: 700; line-height: 1; cursor: pointer;
+}
+.zoom button:hover:not(:disabled) { background: var(--surface-sunken); color: var(--ink); }
+.zoom button:disabled { opacity: .3; cursor: default; }
+.zoom input {
+  width: 2.2rem; border: 0; background: transparent;
+  text-align: right; font: inherit; font-size: .75rem; font-weight: 650;
+  color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.zoom input:focus { outline: none; }
+.zoom-unit { font-size: .6875rem; color: var(--ink-muted); margin-right: .1rem; }
+
+/* 문제가 있는 칸을 잠깐 짚어 준다. */
+@keyframes cellFlash {
+  0%, 70% { background: #fde68a; box-shadow: inset 0 0 0 2px var(--warn); }
+  100% { background: transparent; box-shadow: none; }
+}
+table.grid td.cell-flash { animation: cellFlash 2.4s ease-out forwards; }
