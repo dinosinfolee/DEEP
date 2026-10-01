@@ -31,6 +31,7 @@ const state = {
   zoom: 100,
   loaded: 0,
   total: 0,
+  tailStart: 0,
   loading: false,
   cols: [],
   kinds: [],
@@ -46,6 +47,8 @@ const state = {
 
 /* 쪽을 나누지 않는다. 스크롤이 바닥에 가까워지면 이만큼씩 이어 붙인다. */
 const CHUNK = 200;
+/* 맨 아래 버튼이 바로 닿도록 끝부분은 처음부터 들고 있는다. */
+const TAIL = 100;
 let kernel = null;
 let busyCount = 0;
 
@@ -72,6 +75,8 @@ const ICONS = {
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   more: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+  grip: '<circle cx="9" cy="6" r="1.3"/><circle cx="15" cy="6" r="1.3"/><circle cx="9" cy="12" r="1.3"/><circle cx="15" cy="12" r="1.3"/><circle cx="9" cy="18" r="1.3"/><circle cx="15" cy="18" r="1.3"/>',
+  wide: '<path d="M3 6h18M3 18h18M8 10l-4 2 4 2M16 10l4 2-4 2"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v2M12 19.5v2M21.5 12h-2M4.5 12h-2M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4M18.7 18.7l-1.4-1.4M6.7 6.7L5.3 5.3"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h8"/>',
@@ -934,7 +939,7 @@ function renderSidebar() {
     tag.title = kindName(column.kind);
     row.append(tag, el('span', 'column-name', column.name));
     const flags = el('div', 'column-flags');
-    if (column.missing) flags.append(el('span', 'flag flag-missing', `결측 ${column.missing}`));
+    if (column.missing) flags.append(el('span', 'flag flag-missing', `결측치 ${column.missing}`));
     if (column.outliers) flags.append(el('span', 'flag flag-outlier', `이상 ${column.outliers}`));
     row.append(flags);
     const eye = el('button', 'column-eye');
@@ -969,7 +974,7 @@ const kindLetter = (kind) => ({ number: '#', text: 'A', datetime: '⏱', bool: '
 const kindName = (kind) => ({ number: '숫자', text: '문자', datetime: '날짜', bool: '참/거짓' }[kind] || kind);
 
 function columnTooltip(column) {
-  const parts = [`${column.name} · ${kindName(column.kind)}`, `결측 ${column.missing}개`, `고유값 ${column.unique}개`];
+  const parts = [`${column.name} · ${kindName(column.kind)}`, `결측치 ${column.missing}개`, `고유값 ${column.unique}개`];
   if (column.kind === 'number' && column.mean !== undefined) {
     parts.push(`평균 ${fmt(column.mean)} · 최소 ${fmt(column.min)} · 최대 ${fmt(column.max)}`);
   }
@@ -1048,6 +1053,7 @@ async function renderTable() {
   const cornerInner = el('div', 'row-index-inner');
   cornerInner.append(allBox, el('span', 'row-no', '번호'));
   corner.append(cornerInner);
+  corner.append(resizeHandle(0));
   headRow.append(corner);
   state.visIdx.forEach((index) => {
     const name = data.columns[index];
@@ -1070,6 +1076,7 @@ async function renderTable() {
       event.preventDefault();
       openRename(cell, name);
     };
+    cell.append(resizeHandle(index === state.visIdx[0] ? 1 : state.visIdx.indexOf(index) + 1));
     headRow.append(cell);
   });
   head.append(headRow);
@@ -1077,6 +1084,15 @@ async function renderTable() {
 
   const body = el('tbody');
   appendRows(body, data);
+  state.tailStart = state.total;
+  if (state.total > CHUNK + TAIL) {
+    state.tailStart = state.total - TAIL;
+    const tail = await run(kernel.preview(state.activeTable, state.tailStart, TAIL), '표 끝 읽기');
+    body.append(gapRow(data.columns.length));
+    const mark = state.loaded;
+    appendRows(body, tail);
+    state.loaded = mark;
+  }
   table.append(body);
   scroll.innerHTML = '';
   scroll.append(table);
@@ -1089,6 +1105,39 @@ async function renderTable() {
 }
 
 /* 한 묶음을 tbody 끝에 붙인다. 첫 그리기와 이어 불러오기가 같은 길을 쓴다. */
+/* 앞부분과 끝부분 사이에 몇 행이 가려져 있는지 알리는 줄. 누르면 이어서 불러온다. */
+function gapRow(columnCount) {
+  const tr = el('tr', 'gap-row');
+  tr.dataset.gap = '1';
+  const cell = el('td');
+  cell.colSpan = columnCount + 1;
+  const button = el('button', 'gap-btn');
+  button.type = 'button';
+  button.onclick = () => loadMoreRows();
+  tr.append(cell);
+  cell.append(button);
+  paintGap(tr);
+  return tr;
+}
+
+/* 맨 위·맨 아래로 뛰었을 때 그 행을 잠깐 짚어 준다. 안 그러면 움직였는지 알기 어렵다. */
+function flashRow(where) {
+  const rows = [...document.querySelectorAll('#table-scroll table.grid tbody tr')]
+    .filter((tr) => !tr.dataset.gap);
+  const target = where === 'first' ? rows[0] : rows[rows.length - 1];
+  if (!target) return;
+  document.querySelectorAll('.row-flash').forEach((old) => old.classList.remove('row-flash'));
+  target.classList.add('row-flash');
+  setTimeout(() => target.classList.remove('row-flash'), 2200);
+}
+
+function paintGap(tr) {
+  const button = tr.querySelector('.gap-btn');
+  if (!button) return;
+  const hidden = Math.max(0, state.tailStart - state.loaded);
+  button.textContent = `가운데 ${numberFormat.format(hidden)}행 더 보기`;
+}
+
 function appendRows(body, data) {
   data.rows.forEach((row, rowIndex) => {
     const position = data.offset + rowIndex;
@@ -1127,13 +1176,23 @@ function appendRows(body, data) {
 
 async function loadMoreRows() {
   if (state.loading || !state.activeTable) return;
-  if (state.loaded >= state.total) return;
+  if (state.loaded >= state.tailStart) return;
   const body = document.querySelector('#table-scroll table.grid tbody');
   if (!body) return;
   state.loading = true;
   try {
-    const data = await kernel.preview(state.activeTable, state.loaded, CHUNK);
-    appendRows(body, data);
+    const want = Math.min(CHUNK, state.tailStart - state.loaded);
+    const data = await kernel.preview(state.activeTable, state.loaded, want);
+    const gap = body.querySelector('tr[data-gap]');
+    if (gap) {
+      const holder = el('tbody');
+      appendRows(holder, data);
+      while (holder.firstChild) body.insertBefore(holder.firstChild, gap);
+      if (state.loaded >= state.tailStart) gap.remove();
+      else paintGap(gap);
+    } else {
+      appendRows(body, data);
+    }
     updateTableFoot();
     paintFacts();
   } catch (error) {
@@ -1146,9 +1205,10 @@ async function loadMoreRows() {
 function updateTableFoot() {
   const foot = $('#table-foot');
   foot.hidden = !state.total;
-  $('#page-label').textContent = state.loaded >= state.total
-    ? `전체 ${numberFormat.format(state.total)}행`
-    : `${numberFormat.format(state.loaded)} / ${numberFormat.format(state.total)}행 · 내리면 더 보입니다`;
+  const hidden = Math.max(0, state.tailStart - state.loaded);
+  $('#page-label').textContent = hidden
+    ? `전체 ${numberFormat.format(state.total)}행 · 가운데 ${numberFormat.format(hidden)}행은 내리면 보입니다`
+    : `전체 ${numberFormat.format(state.total)}행`;
 }
 
 /* 고른 것이 바뀌었다고 표를 통째로 다시 그리면 스크롤과 이어 불러온 행이 날아간다.
@@ -1187,6 +1247,71 @@ function paintFacts() {
 
 /* 표는 보이는 행의 내용에 맞춰 열 너비를 다시 잡는다. 그래서 정렬하거나 행을 더
    불러올 때마다 폭이 조금씩 움직인다. 처음 잰 너비를 고정해 두면 멈춘다. */
+/* 엑셀처럼 경계를 끌어 너비를 바꾸고, 두 번 누르면 내용에 맞춘다. */
+function resizeHandle(index) {
+  const grip = el('div', 'col-resizer');
+  grip.title = '끌어서 너비 조절 · 두 번 누르면 내용에 맞춤';
+  grip.onclick = (event) => event.stopPropagation();
+  grip.ondblclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    autoFitColumn(index);
+  };
+  grip.onmousedown = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const heads = [...document.querySelectorAll('#table-scroll table.grid thead th')];
+    const head = heads[index];
+    if (!head) return;
+    const startX = event.clientX;
+    const startWidth = head.getBoundingClientRect().width;
+    document.body.classList.add('resizing');
+    const move = (moveEvent) => {
+      setColumnWidth(index, Math.max(44, Math.round(startWidth + moveEvent.clientX - startX)));
+    };
+    const stop = () => {
+      document.body.classList.remove('resizing');
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', stop);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', stop);
+  };
+  return grip;
+}
+
+function setColumnWidth(index, width) {
+  const head = document.querySelectorAll('#table-scroll table.grid thead th')[index];
+  if (!head) return;
+  head.style.width = `${width}px`;
+  if (state.colWidths && state.colWidths.widths) state.colWidths.widths[index] = width;
+}
+
+/* 그려져 있는 칸의 글자 길이를 재서 가장 긴 것에 맞춘다. */
+function autoFitColumn(index) {
+  const table = document.querySelector('#table-scroll table.grid');
+  if (!table) return;
+  const sample = table.querySelector('tbody td') || table.querySelector('thead th');
+  const probe = el('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;left:-9999px;top:0';
+  probe.style.font = getComputedStyle(sample).font;
+  document.body.append(probe);
+
+  const head = table.querySelectorAll('thead th')[index];
+  probe.textContent = head ? head.textContent : '';
+  // 머리글에는 체크상자·자료형 표시·정렬 표시가 함께 들어간다.
+  let widest = probe.offsetWidth + 76;
+  table.querySelectorAll('tbody tr').forEach((tr) => {
+    if (tr.dataset.gap) return;
+    const cell = tr.children[index];
+    if (!cell) return;
+    probe.textContent = cell.textContent;
+    widest = Math.max(widest, probe.offsetWidth + (index === 0 ? 44 : 26));
+  });
+  probe.remove();
+  setColumnWidth(index, Math.min(560, Math.max(44, Math.ceil(widest))));
+}
+
 function lockColumnWidths(table) {
   const key = `${state.activeTable}|${state.cols.join('|')}`;
   const heads = [...table.querySelectorAll('thead th')];
@@ -1601,7 +1726,8 @@ async function revealOne(table, column, position) {
     await renderTable();
   }
   let guard = 0;
-  while (state.loaded <= position && state.loaded < state.total && guard < 400) {
+  while (!document.querySelector(`#table-scroll table.grid tbody tr[data-pos="${position}"]`)
+    && state.loaded < state.tailStart && guard < 400) {
     await loadMoreRows();
     guard += 1;
   }
@@ -1927,11 +2053,11 @@ function profileCard(column) {
 
   const rows = [];
   if (column.kind === 'number') {
-    rows.push(['평균', fmt(column.mean)], ['중앙값', fmt(column.median)],
+    rows.push(['평균값', fmt(column.mean)], ['중앙값', fmt(column.median)],
       ['표준편차', fmt(column.std)], ['고유값', `${numberFormat.format(column.unique)}개`],
       ['최소값', fmt(column.min)], ['최대값', fmt(column.max)]);
   }
-  rows.push(['결측', `${column.missing}개`]);
+  rows.push(['결측치', `${column.missing}개`]);
   if (column.kind !== 'number') rows.push(['고유값', `${numberFormat.format(column.unique)}개`]);
   if (column.outliers) rows.push(['이상치', `${column.outliers}개`]);
   const list = el('div', 'profile-stats');
@@ -2101,13 +2227,81 @@ function renderCharts() {
   state.charts.forEach(refreshChart);
 }
 
+let dragCardId = null;
+
+function clearDropMarks() {
+  document.querySelectorAll('.drop-before, .drop-after')
+    .forEach((node) => node.classList.remove('drop-before', 'drop-after'));
+}
+
+function moveChart(fromId, toId, after) {
+  if (!fromId || fromId === toId) return;
+  const from = state.charts.findIndex((item) => item.id === fromId);
+  if (from === -1) return;
+  const [moved] = state.charts.splice(from, 1);
+  let to = state.charts.findIndex((item) => item.id === toId);
+  if (to === -1) to = state.charts.length - 1;
+  state.charts.splice(after ? to + 1 : to, 0, moved);
+  renderCharts();
+  touch();
+}
+
 function buildChartCard(chart) {
   const schema = CHART_KINDS[chart.kind];
   const card = el('div', `card${chart.editing ? ' editing' : ''}`);
   card.dataset.id = chart.id;
 
+  if (chart.wide) card.classList.add('card-wide');
+
   const head = el('div', 'card-head');
+  const grip = el('button', 'card-grip');
+  grip.type = 'button';
+  grip.title = '끌어서 자리 옮기기';
+  grip.innerHTML = icon(ICONS.grip);
+  // 카드 전체를 끌 수 있게 두면 설정칸과 그래프를 다루기 어렵다. 손잡이를 잡을 때만 켠다.
+  grip.onmousedown = () => { card.draggable = true; };
+  grip.onmouseup = () => { card.draggable = false; };
+  head.append(grip);
   head.append(el('span', 'card-title', chartTitle(chart)));
+
+  card.ondragstart = (event) => {
+    dragCardId = chart.id;
+    card.classList.add('dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', chart.id);
+  };
+  card.ondragend = () => {
+    dragCardId = null;
+    card.draggable = false;
+    card.classList.remove('dragging');
+    clearDropMarks();
+  };
+  card.ondragover = (event) => {
+    if (!dragCardId || dragCardId === chart.id) return;
+    event.preventDefault();
+    const box = card.getBoundingClientRect();
+    const after = event.clientX > box.left + box.width / 2;
+    card.classList.toggle('drop-after', after);
+    card.classList.toggle('drop-before', !after);
+  };
+  card.ondragleave = () => card.classList.remove('drop-before', 'drop-after');
+  card.ondrop = (event) => {
+    event.preventDefault();
+    const after = card.classList.contains('drop-after');
+    clearDropMarks();
+    moveChart(dragCardId, chart.id, after);
+  };
+
+  const widen = el('button', 'btn btn-icon');
+  widen.type = 'button';
+  widen.title = chart.wide ? '한 칸으로' : '두 칸으로 넓히기';
+  widen.innerHTML = icon(ICONS.wide);
+  widen.onclick = () => {
+    chart.wide = !chart.wide;
+    renderCharts();
+    touch();
+  };
+
   const toggle = el('button', 'btn btn-icon');
   toggle.type = 'button';
   toggle.title = '설정';
@@ -2134,7 +2328,7 @@ function buildChartCard(chart) {
     touch();
     renderCharts();
   };
-  head.append(toggle, copy, remove);
+  head.append(widen, toggle, copy, remove);
   card.append(head);
 
   const settings = el('div', 'card-settings');
@@ -2399,7 +2593,7 @@ const RENDER_ANALYSIS = {
       ['열', String(result.rows.length)],
     ]));
     body.append(resultTable(
-      ['열', '자료형', '결측', '결측 비율', '고유값', 'IQR 이상치'],
+      ['열', '자료형', '결측치', '결측치 비율', '고유값', 'IQR 이상치'],
       result.rows.map((row) => [
         row.column, kindName(row.kind), row.missing, pct(row.missingRatio), row.unique,
         row.kind === 'number' ? row.outliers : '—',
@@ -2411,7 +2605,7 @@ const RENDER_ANALYSIS = {
 
   describe(body, result) {
     body.append(resultTable(
-      ['열', '자료형', '결측', '고유값', '평균', '중앙값', '표준편차', '최소', '최대'],
+      ['열', '자료형', '결측치', '고유값', '평균값', '중앙값', '표준편차', '최소값', '최대값'],
       result.rows.map((row) => [
         row.name, kindName(row.kind), row.missing, row.unique,
         row.mean !== undefined ? fmt(row.mean) : '—',
@@ -2677,6 +2871,8 @@ function switchView(view) {
   });
   const onTable = view === 'explore' || view === 'clean';
   $('#view-table').hidden = !onTable;
+  if (!onTable) $('#table-foot').hidden = true;
+  else updateTableFoot();
   // 삭제는 다듬는 단계에서만. 살펴보는 동안에는 데이터를 건드리지 않는다.
   $('#btn-delete-selection').hidden = view !== 'clean';
   $('#view-charts').hidden = view !== 'charts';
@@ -3111,22 +3307,15 @@ function wireEvents() {
 
   $('#btn-delete-selection').onclick = deleteSelection;
 
-  $('#go-top').onclick = () => $('#table-scroll').scrollTo({ top: 0 });
-  $('#go-bottom').onclick = async () => {
-    const button = $('#go-bottom');
-    button.disabled = true;
-    try {
-      // 끝으로 가려면 남은 묶음을 모두 불러와야 한다.
-      let guard = 0;
-      while (state.loaded < state.total && guard < 400) {
-        await loadMoreRows();
-        guard += 1;
-      }
-      const box = $('#table-scroll');
-      box.scrollTo({ top: box.scrollHeight });
-    } finally {
-      button.disabled = false;
-    }
+  $('#go-top').onclick = () => {
+    $('#table-scroll').scrollTo({ top: 0 });
+    flashRow('first');
+  };
+  // 끝부분은 처음부터 그려 두므로 기다릴 것이 없다.
+  $('#go-bottom').onclick = () => {
+    const box = $('#table-scroll');
+    box.scrollTo({ top: box.scrollHeight });
+    flashRow('last');
   };
 
   $('#btn-export-csv').onclick = async () => {
@@ -3144,7 +3333,9 @@ function wireEvents() {
   // 바닥 가까이 내려오면 다음 묶음을 이어 붙인다.
   $('#table-scroll').addEventListener('scroll', () => {
     const box = $('#table-scroll');
-    if (box.scrollTop + box.clientHeight >= box.scrollHeight - 400) loadMoreRows();
+    const gap = box.querySelector('tr[data-gap]');
+    const edge = gap ? gap.offsetTop - 500 : box.scrollHeight - 400;
+    if (box.scrollTop + box.clientHeight >= edge) loadMoreRows();
   });
 
   $('#modal-close').onclick = () => closeModal(false);

@@ -24,12 +24,6 @@
 
   <div class="topbar-actions">
     <span id="autosave-mark" class="autosave">자동 저장됨</span>
-    <div class="zoom" role="group" aria-label="화면 배율">
-      <button id="zoom-out" type="button" title="축소">&#8722;</button>
-      <input id="zoom-value" type="text" inputmode="numeric" value="100" aria-label="화면 배율 (%)">
-      <span class="zoom-unit">%</span>
-      <button id="zoom-in" type="button" title="확대">&#43;</button>
-    </div>
     <span id="kernel-chip" class="chip chip-wait">
       <span class="chip-dot"></span><span id="kernel-chip-text">준비 중</span>
     </span>
@@ -91,15 +85,6 @@
           <button class="ghost-btn" id="btn-sample" type="button">가상 데이터로 둘러보기</button>
         </div>
       </div>
-      <div class="table-foot" id="table-foot" hidden>
-        <button class="foot-btn" id="go-top" type="button" title="맨 위로">
-          <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
-        </button>
-        <span id="page-label" class="hint"></span>
-        <button class="foot-btn" id="go-bottom" type="button" title="맨 아래로">
-          <svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
-        </button>
-      </div>
     </section>
 
     <section class="view" id="view-charts" hidden>
@@ -109,6 +94,24 @@
     <section class="view" id="view-analysis" hidden>
       <div class="card-grid" id="analysis-grid"></div>
     </section>
+
+    <div class="main-foot">
+      <div class="table-foot" id="table-foot" hidden>
+        <button class="foot-btn" id="go-top" type="button" title="맨 위로">
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+        <span id="page-label" class="hint"></span>
+        <button class="foot-btn" id="go-bottom" type="button" title="맨 아래로">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="zoom" role="group" aria-label="화면 배율">
+        <button id="zoom-out" type="button" title="축소">&#8722;</button>
+        <input id="zoom-value" type="text" inputmode="numeric" value="100" aria-label="화면 배율 (%)">
+        <span class="zoom-unit">%</span>
+        <button id="zoom-in" type="button" title="확대">&#43;</button>
+      </div>
+    </div>
   </main>
 
   <aside class="inspector" id="inspector">
