@@ -36,6 +36,7 @@ const state = {
   kinds: [],
   visIdx: [],
   hiddenCols: [],
+  colWidths: null,
   openFacts: [],
   factCursor: {},
   locateCache: {},
@@ -1080,9 +1081,11 @@ async function renderTable() {
   scroll.innerHTML = '';
   scroll.append(table);
 
+  lockColumnWidths(table);
   scroll.scrollTop = 0;
   updateTableFoot();
   renderSelectBar();
+  paintFacts();
 }
 
 /* 한 묶음을 tbody 끝에 붙인다. 첫 그리기와 이어 불러오기가 같은 길을 쓴다. */
@@ -1132,6 +1135,7 @@ async function loadMoreRows() {
     const data = await kernel.preview(state.activeTable, state.loaded, CHUNK);
     appendRows(body, data);
     updateTableFoot();
+    paintFacts();
   } catch (error) {
     toast(`표를 더 읽지 못했습니다. ${error.message}`, 'error');
   } finally {
@@ -1149,6 +1153,56 @@ function updateTableFoot() {
 
 /* 고른 것이 바뀌었다고 표를 통째로 다시 그리면 스크롤과 이어 불러온 행이 날아간다.
    이미 그려진 칸의 표시만 바꾼다. */
+/* 펼쳐 둔 확인 묶음에 해당하는 칸을 물들인다. 스크롤하다가도 어디가 문제인지 보인다. */
+function paintFacts() {
+  const table = document.querySelector('#table-scroll table.grid');
+  if (!table) return;
+  table.querySelectorAll('.mark-missing, .mark-outlier, .mark-type, .mark-duplicated')
+    .forEach((node) => node.classList.remove('mark-missing', 'mark-outlier', 'mark-type', 'mark-duplicated'));
+  const meta = tableMeta(state.activeTable);
+  if (!meta || !state.openFacts.length) return;
+
+  factGroups(meta).forEach((group) => {
+    if (!state.openFacts.includes(group.key)) return;
+    group.rows.forEach((row) => {
+      const index = row.column ? state.cols.indexOf(row.column) : -1;
+      if (row.column && index === -1) return;
+      if (row.kind === 'type') {
+        // 자료형은 열 전체가 대상이다.
+        table.querySelectorAll('tbody tr').forEach((tr) => {
+          const cell = tr.children[index + 1];
+          if (cell) cell.classList.add('mark-type');
+        });
+        return;
+      }
+      (row.positions || []).forEach((position) => {
+        const tr = table.querySelector(`tbody tr[data-pos="${position}"]`);
+        if (!tr) return;
+        const node = row.column ? tr.children[index + 1] : tr;
+        if (node) node.classList.add(`mark-${row.kind}`);
+      });
+    });
+  });
+}
+
+/* 표는 보이는 행의 내용에 맞춰 열 너비를 다시 잡는다. 그래서 정렬하거나 행을 더
+   불러올 때마다 폭이 조금씩 움직인다. 처음 잰 너비를 고정해 두면 멈춘다. */
+function lockColumnWidths(table) {
+  const key = `${state.activeTable}|${state.cols.join('|')}`;
+  const heads = [...table.querySelectorAll('thead th')];
+  if (!heads.length) return;
+  if (!state.colWidths || state.colWidths.key !== key) {
+    state.colWidths = {
+      key,
+      widths: heads.map((head) => Math.ceil(head.getBoundingClientRect().width)),
+    };
+  }
+  state.colWidths.widths.forEach((width, index) => {
+    if (heads[index]) heads[index].style.width = `${width}px`;
+  });
+  table.style.tableLayout = 'fixed';
+}
+
 function paintSelection() {
   const table = document.querySelector('#table-scroll table.grid');
   if (!table) return;
@@ -1489,6 +1543,7 @@ function factSections(meta) {
         ? state.openFacts.filter((key) => key !== group.key)
         : [...state.openFacts, group.key];
       renderInspector();
+      paintFacts();
     };
     section.append(head);
     if (open) {
@@ -1503,50 +1558,35 @@ function factSections(meta) {
 function factRow(meta, row) {
   const line = el('div', 'fact-row');
   line.append(el('span', 'fact-col', row.label), el('span', 'fact-num', row.amount));
-  if (!row.what) return line;
+  const spots = row.positions || [];
+  if (!spots.length) return line;
 
-  const key = `${meta.name}|${row.label}|${row.what}`;
+  const key = `${meta.name}|${row.label}|${row.kind}`;
   const nav = el('div', 'fact-nav');
   const prev = el('button');
-  const spot = el('span', 'fact-pos', '–');
+  const spot = el('span', 'fact-pos', `– / ${spots.length}`);
   const next = el('button');
   prev.type = 'button';
   next.type = 'button';
   prev.textContent = '‹';
   next.textContent = '›';
-  prev.title = '앞으로';
-  next.title = '뒤로';
+  prev.title = '앞 칸으로';
+  next.title = '다음 칸으로';
 
+  // 위치는 표를 계산할 때 이미 받아 두었다. 누르면 바로 움직인다.
   const step = async (delta) => {
-    prev.disabled = true;
-    next.disabled = true;
-    try {
-      let spots = state.locateCache[key];
-      if (!spots) {
-        const found = await kernel.locate(meta.name, row.label, row.what);
-        spots = found.positions;
-        state.locateCache[key] = spots;
-      }
-      if (!spots.length) { spot.textContent = '–'; return; }
-      const at = state.factCursor[key];
-      const index = at === undefined
-        ? (delta > 0 ? 0 : spots.length - 1)
-        : (at + delta + spots.length) % spots.length;
-      state.factCursor[key] = index;
-      spot.textContent = `${index + 1} / ${spots.length}`;
-      await revealOne(meta.name, row.label, spots[index]);
-    } catch (error) {
-      toast(`위치를 찾지 못했습니다. ${error.message}`, 'error');
-    } finally {
-      prev.disabled = false;
-      next.disabled = false;
-    }
+    const at = state.factCursor[key];
+    const index = at === undefined
+      ? (delta > 0 ? 0 : spots.length - 1)
+      : (at + delta + spots.length) % spots.length;
+    state.factCursor[key] = index;
+    spot.textContent = `${index + 1} / ${spots.length}`;
+    await revealOne(meta.name, row.column || null, spots[index]);
   };
   prev.onclick = () => step(-1);
   next.onclick = () => step(1);
   const at = state.factCursor[key];
-  const spots = state.locateCache[key];
-  if (at !== undefined && spots) spot.textContent = `${at + 1} / ${spots.length}`;
+  if (at !== undefined) spot.textContent = `${at + 1} / ${spots.length}`;
 
   nav.append(prev, spot, next);
   line.append(nav);
@@ -1565,18 +1605,19 @@ async function revealOne(table, column, position) {
     await loadMoreRows();
     guard += 1;
   }
-  const index = state.cols.indexOf(column);
-  if (index === -1) {
+  const row = document.querySelector(`#table-scroll table.grid tbody tr[data-pos="${position}"]`);
+  if (!row) return;
+  const index = column ? state.cols.indexOf(column) : -1;
+  if (column && index === -1) {
     toast(`${column} 열이 표에서 숨겨져 있습니다.`);
     return;
   }
-  const row = document.querySelector(`#table-scroll table.grid tbody tr[data-pos="${position}"]`);
-  const cell = row && row.children[index + 1];
-  if (!cell) return;
-  document.querySelectorAll('td.cell-flash').forEach((old) => old.classList.remove('cell-flash'));
-  cell.scrollIntoView({ block: 'center' });
-  cell.classList.add('cell-flash');
-  setTimeout(() => cell.classList.remove('cell-flash'), 2400);
+  const target = column ? row.children[index + 1] : row;
+  if (!target) return;
+  document.querySelectorAll('.cell-flash').forEach((old) => old.classList.remove('cell-flash'));
+  target.scrollIntoView({ block: 'center' });
+  target.classList.add('cell-flash');
+  setTimeout(() => target.classList.remove('cell-flash'), 5000);
 }
 
 function factGroups(meta) {
@@ -1590,7 +1631,9 @@ function factGroups(meta) {
       rows: missing.map((column) => ({
         label: column.name,
         amount: `${numberFormat.format(column.missing)}개 · ${(column.missingRatio * 100).toFixed(1)}%`,
-        what: 'missing',
+        kind: 'missing',
+        column: column.name,
+        positions: column.missingAt || [],
       })),
     },
     {
@@ -1599,19 +1642,26 @@ function factGroups(meta) {
       rows: outlier.map((column) => ({
         label: column.name,
         amount: `${numberFormat.format(column.outliers)}개`,
-        what: 'outlier',
+        kind: 'outlier',
+        column: column.name,
+        positions: column.outlierAt || [],
       })),
     },
     {
       key: 'type', label: '자료형 확인',
       note: '숫자처럼 보이는데 문자로 읽힌 열입니다. 이대로 두면 평균을 내거나 그래프를 그릴 수 없습니다. 다만 학번·코드처럼 계산하지 않는 값이라면 문자로 두는 편이 맞습니다.',
-      rows: typed.map((column) => ({ label: column.name, amount: '문자로 읽힘' })),
+      rows: typed.map((column) => ({ label: column.name, amount: '문자로 읽힘', kind: 'type', column: column.name })),
     },
     {
       key: 'duplicated', label: '중복 행 확인',
       note: '모든 값이 똑같은 행입니다. 같은 자료가 두 번 들어갔을 수 있습니다.',
       rows: meta.duplicated
-        ? [{ label: '표 전체', amount: `${numberFormat.format(meta.duplicated)}행` }]
+        ? [{
+          label: '표 전체',
+          amount: `${numberFormat.format(meta.duplicated)}행`,
+          kind: 'duplicated',
+          positions: meta.duplicatedAt || [],
+        }]
         : [],
     },
   ];
@@ -3060,6 +3110,24 @@ function wireEvents() {
   };
 
   $('#btn-delete-selection').onclick = deleteSelection;
+
+  $('#go-top').onclick = () => $('#table-scroll').scrollTo({ top: 0 });
+  $('#go-bottom').onclick = async () => {
+    const button = $('#go-bottom');
+    button.disabled = true;
+    try {
+      // 끝으로 가려면 남은 묶음을 모두 불러와야 한다.
+      let guard = 0;
+      while (state.loaded < state.total && guard < 400) {
+        await loadMoreRows();
+        guard += 1;
+      }
+      const box = $('#table-scroll');
+      box.scrollTo({ top: box.scrollHeight });
+    } finally {
+      button.disabled = false;
+    }
+  };
 
   $('#btn-export-csv').onclick = async () => {
     if (!state.activeTable) return;

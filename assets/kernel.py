@@ -86,6 +86,10 @@ def kind_of(series: pd.Series) -> str:
     return "text"
 
 
+# 화면에 표시할 위치는 이만큼까지만 보낸다. 더 많아도 눈으로 훑는 용도라 의미가 없다.
+MARK_LIMIT = 500
+
+
 def column_info(series: pd.Series) -> dict:
     kind = kind_of(series)
     total = int(len(series))
@@ -97,6 +101,9 @@ def column_info(series: pd.Series) -> dict:
         "missingRatio": (missing / total) if total else 0.0,
         "unique": int(series.nunique(dropna=True)),
     }
+    # 화면에서 '다음 칸으로' 이동할 때 쓰도록 위치를 미리 담는다. 너무 많으면 앞쪽만.
+    if missing:
+        info["missingAt"] = [int(i) for i in np.flatnonzero(series.isna().to_numpy())[:MARK_LIMIT]]
     valid = series.dropna()
     if kind == "number" and len(valid):
         numeric = pd.to_numeric(valid, errors="coerce").dropna()
@@ -115,6 +122,9 @@ def column_info(series: pd.Series) -> dict:
                 q3=q3,
                 outliers=int(((numeric < low) | (numeric > high)).sum()),
             )
+            flags = ((numeric < low) | (numeric > high)).reindex(series.index, fill_value=False)
+            if flags.any():
+                info["outlierAt"] = [int(i) for i in np.flatnonzero(flags.to_numpy())[:MARK_LIMIT]]
             # 열 프로필에 그릴 작은 분포 그림. 화면에서 바로 쓰도록 미리 센다.
             if numeric.max() > numeric.min():
                 counts = pd.cut(numeric, bins=12).value_counts(sort=False)
@@ -142,6 +152,7 @@ def table_meta(name: str) -> dict:
         "rows": int(len(frame)),
         "columns": [column_info(frame[column]) for column in frame.columns],
         "duplicated": int(frame.duplicated().sum()),
+        "duplicatedAt": [int(i) for i in np.flatnonzero(frame.duplicated().to_numpy())[:MARK_LIMIT]],
         "isSource": name in RAW,
     }
 
