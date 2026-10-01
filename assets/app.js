@@ -36,7 +36,8 @@ const state = {
   kinds: [],
   visIdx: [],
   hiddenCols: [],
-  openFacts: [],
+  factCursor: {},
+  locateCache: {},
   page: 0,
   pendingRecipe: null,
 };
@@ -106,7 +107,8 @@ async function run(promise, what) {
   }
 }
 
-const numberFormat = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 });
+// 천 단위 구분 기호는 쓰지 않는다. 코드·번호처럼 수량이 아닌 값에 쉼표가 붙으면 잘못 읽힌다.
+const numberFormat = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4, useGrouping: false });
 const fmt = (value, digits = 4) => {
   if (value === null || value === undefined || Number.isNaN(value)) return '—';
   if (typeof value !== 'number') return String(value);
@@ -838,10 +840,17 @@ function renderSidebar() {
     const row = el('div', 'column-row');
     const hidden = state.hiddenCols.includes(column.name);
     if (hidden) row.classList.add('column-hidden');
+    const tag = el('span', `kind-tag kind-${column.kind}`, kindLetter(column.kind));
+    tag.title = kindName(column.kind);
+    row.append(tag, el('span', 'column-name', column.name));
+    const flags = el('div', 'column-flags');
+    if (column.missing) flags.append(el('span', 'flag flag-missing', `결측 ${column.missing}`));
+    if (column.outliers) flags.append(el('span', 'flag flag-outlier', `이상 ${column.outliers}`));
+    row.append(flags);
     const eye = el('button', 'column-eye');
     eye.type = 'button';
     eye.title = hidden ? '표에 다시 보이기' : '표에서 숨기기';
-    eye.innerHTML = (hidden ? EYE_OFF : EYE_ON).split('|').map((d) => icon(d)).join('');
+    eye.innerHTML = icon(hidden ? ICONS.eyeOff : ICONS.eye);
     eye.onclick = async (event) => {
       event.stopPropagation();
       state.hiddenCols = hidden
@@ -854,13 +863,8 @@ function renderSidebar() {
       renderSelectBar();
       await renderTable();
     };
-    const tag = el('span', `kind-tag kind-${column.kind}`, kindLetter(column.kind));
-    tag.title = kindName(column.kind);
-    row.append(eye, tag, el('span', 'column-name', column.name));
-    const flags = el('div', 'column-flags');
-    if (column.missing) flags.append(el('span', 'flag flag-missing', `결측 ${column.missing}`));
-    if (column.outliers) flags.append(el('span', 'flag flag-outlier', `이상 ${column.outliers}`));
-    row.append(flags);
+    row.append(eye);
+
     const more = el('button', 'column-menu-btn');
     more.type = 'button';
     more.innerHTML = icon(ICONS.more);
@@ -870,9 +874,6 @@ function renderSidebar() {
     columns.append(row);
   });
 }
-
-const EYE_ON = 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z|M12 15a3 3 0 100-6 3 3 0 000 6z';
-const EYE_OFF = 'M4 4l16 16|M9.9 5.2A9.8 9.8 0 0112 5c6.5 0 10 6 10 6a16 16 0 01-3.3 3.9M6.3 7.3A16 16 0 002 11s3.5 6 10 6c1.2 0 2.3-.2 3.3-.5';
 
 const kindLetter = (kind) => ({ number: '#', text: 'A', datetime: '⏱', bool: '✓' }[kind] || '?');
 const kindName = (kind) => ({ number: '숫자', text: '문자', datetime: '날짜', bool: '참/거짓' }[kind] || kind);
@@ -970,16 +971,14 @@ async function renderTable() {
     });
     const tag = el('span', `kind-tag kind-${data.kinds[index]}`, kindLetter(data.kinds[index]));
     const label = el('span', 'th-label', name);
-    const mark = sortMark(state.activeTable, name);
-    inner.append(box, tag, label);
-    if (mark) inner.append(el('span', 'sort-mark', mark));
+    inner.append(box, tag, label, el('span', 'sort-mark', sortMark(state.activeTable, name)));
     cell.append(inner);
     cell.classList.add('sortable');
     cell.title = '누르면 정렬 · Shift를 누른 채로 누르면 기준 추가 · 두 번 누르면 이름 고치기';
     cell.onclick = (event) => cycleSort(state.activeTable, name, event.shiftKey);
     cell.ondblclick = (event) => {
       event.preventDefault();
-      startRename(cell, label, name);
+      openRename(cell, name);
     };
     headRow.append(cell);
   });
@@ -1111,35 +1110,53 @@ function selectBox(checked, title, onToggle) {
   return box;
 }
 
-/* 머리글에서 바로 이름 고치기. 빈 이름이나 그대로면 아무 일도 없다. */
-function startRename(cell, label, name) {
-  if (cell.querySelector('.rename-input')) return;
+/* 이름 고치기는 머리글 아래 작은 팝업에서 받는다. 머리글 안에서 입력칸으로 바꾸면
+   그 열의 너비가 출렁여 표 전체가 흔들린다. */
+function openRename(anchor, name) {
+  document.querySelectorAll('.menu, .rename-pop').forEach((node) => node.remove());
+  const pop = el('div', 'rename-pop');
+  pop.append(el('div', 'rename-head', '열 이름 바꾸기'));
   const input = el('input', 'rename-input');
   input.value = name;
-  label.replaceWith(input);
+  const row = el('div', 'rename-acts');
+  const cancel = el('button', 'ghost-btn');
+  cancel.type = 'button';
+  cancel.textContent = '취소';
+  const ok = el('button', 'btn btn-primary');
+  ok.type = 'button';
+  ok.textContent = '바꾸기';
+  row.append(cancel, ok);
+  pop.append(input, row);
+  document.body.append(pop);
+
+  const box = anchor.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - pop.offsetWidth - 12))}px`;
+  pop.style.top = `${Math.min(box.bottom + 4, window.innerHeight - pop.offsetHeight - 12)}px`;
   input.focus();
   input.select();
-  let done = false;
-  const finish = async (commit) => {
-    if (done) return;
-    done = true;
+
+  const close = () => {
+    pop.remove();
+    document.removeEventListener('mousedown', outside);
+  };
+  const outside = (event) => { if (!pop.contains(event.target)) close(); };
+  setTimeout(() => document.addEventListener('mousedown', outside), 0);
+
+  const commit = async () => {
     const next = input.value.trim();
-    if (!commit || !next || next === name) {
-      await renderTable();
-      return;
-    }
+    close();
+    if (!next || next === name) return;
     state.steps.push({ id: uid(), op: 'rename_column', table: state.activeTable, from: name, to: next });
     state.redo = [];
     await rebuildAll();
   };
-  input.onclick = (event) => event.stopPropagation();
-  input.ondblclick = (event) => event.stopPropagation();
+  cancel.onclick = close;
+  ok.onclick = commit;
   input.onkeydown = (event) => {
     event.stopPropagation();
-    if (event.key === 'Enter') finish(true);
-    if (event.key === 'Escape') finish(false);
+    if (event.key === 'Enter') commit();
+    if (event.key === 'Escape') close();
   };
-  input.onblur = () => finish(true);
 }
 
 async function afterSelect() {
@@ -1344,6 +1361,7 @@ function renderInspector() {
 
 function renderExplore(body, meta) {
   body.append(tableSummary(meta));
+  body.append(factSections(meta));
   body.append(columnProfile(meta, false));
 }
 
@@ -1361,62 +1379,112 @@ function tableSummary(meta) {
     kinds.append(el('span', 'summary-kind', `${kindName(kind)} ${count}`));
   });
   box.append(kinds);
-
-  const groups = factGroups(meta);
-  const toggles = el('div', 'fact-toggles');
-  groups.forEach((group) => {
-    const open = state.openFacts.includes(group.key);
-    if (!group.count) {
-      const chip = el('button', 'fact-toggle none');
-      chip.type = 'button';
-      chip.disabled = true;
-      chip.append(el('span', null, `${group.label} 없음`));
-      toggles.append(chip);
-      return;
-    }
-    const chip = el('button', `fact-toggle${open ? ' on' : ''}`);
-    chip.type = 'button';
-    chip.append(el('span', null, group.label), el('b', null, String(group.count)), el('span', null, open ? '▴' : '▾'));
-    chip.onclick = () => {
-      state.openFacts = open
-        ? state.openFacts.filter((key) => key !== group.key)
-        : [...state.openFacts, group.key];
-      renderInspector();
-    };
-    toggles.append(chip);
-  });
-  box.append(toggles);
-
-  groups.forEach((group) => {
-    if (!group.count || !state.openFacts.includes(group.key)) return;
-    const panel = el('div', 'fact-panel');
-    panel.append(el('div', 'fact-note', group.note));
-    group.rows.forEach((row) => {
-      const line = el('div', 'fact-row');
-      line.append(el('span', 'fact-col', row.label), el('span', 'fact-num', row.amount));
-      if (row.what) {
-        const look = el('button');
-        look.type = 'button';
-        look.textContent = '보기';
-        look.onclick = () => revealCells(meta.name, row.label, row.what, look);
-        line.append(look);
-      }
-      panel.append(line);
-    });
-    box.append(panel);
-  });
-
   return box;
 }
 
-/* 요약에서 펼쳐 보는 묶음. 무엇인지 설명하고, 어느 열에 몇 개인지 보여준다. */
+/* 요약 아래에 확인 영역을 구분선으로 나눠 쌓는다. */
+function factSections(meta) {
+  const wrap = el('div', 'fact-sections');
+  factGroups(meta).forEach((group) => {
+    const section = el('div', 'fact-section');
+    const head = el('div', 'fact-section-head');
+    head.append(el('span', 'fact-section-title', group.label));
+    head.append(el('span', group.rows.length ? 'fact-section-count' : 'fact-section-count ok',
+      group.rows.length ? String(group.rows.length) : '없음'));
+    section.append(head);
+    if (group.note) section.append(el('div', 'fact-note', group.note));
+    group.rows.forEach((row) => section.append(factRow(meta, row)));
+    wrap.append(section);
+  });
+  return wrap;
+}
+
+function factRow(meta, row) {
+  const line = el('div', 'fact-row');
+  line.append(el('span', 'fact-col', row.label), el('span', 'fact-num', row.amount));
+  if (!row.what) return line;
+
+  const key = `${meta.name}|${row.label}|${row.what}`;
+  const nav = el('div', 'fact-nav');
+  const prev = el('button');
+  const spot = el('span', 'fact-pos', '–');
+  const next = el('button');
+  prev.type = 'button';
+  next.type = 'button';
+  prev.textContent = '‹';
+  next.textContent = '›';
+  prev.title = '앞으로';
+  next.title = '뒤로';
+
+  const step = async (delta) => {
+    prev.disabled = true;
+    next.disabled = true;
+    try {
+      let spots = state.locateCache[key];
+      if (!spots) {
+        const found = await kernel.locate(meta.name, row.label, row.what);
+        spots = found.positions;
+        state.locateCache[key] = spots;
+      }
+      if (!spots.length) { spot.textContent = '–'; return; }
+      const at = state.factCursor[key];
+      const index = at === undefined
+        ? (delta > 0 ? 0 : spots.length - 1)
+        : (at + delta + spots.length) % spots.length;
+      state.factCursor[key] = index;
+      spot.textContent = `${index + 1} / ${spots.length}`;
+      await revealOne(meta.name, row.label, spots[index]);
+    } catch (error) {
+      toast(`위치를 찾지 못했습니다. ${error.message}`, 'error');
+    } finally {
+      prev.disabled = false;
+      next.disabled = false;
+    }
+  };
+  prev.onclick = () => step(-1);
+  next.onclick = () => step(1);
+  const at = state.factCursor[key];
+  const spots = state.locateCache[key];
+  if (at !== undefined && spots) spot.textContent = `${at + 1} / ${spots.length}`;
+
+  nav.append(prev, spot, next);
+  line.append(nav);
+  return line;
+}
+
+/* 한 칸만 짚는다. 표를 그 자리까지 내리고 잠깐 강조한다. */
+async function revealOne(table, column, position) {
+  if (state.activeTable !== table) {
+    state.activeTable = table;
+    renderSidebar();
+    await renderTable();
+  }
+  let guard = 0;
+  while (state.loaded <= position && state.loaded < state.total && guard < 400) {
+    await loadMoreRows();
+    guard += 1;
+  }
+  const index = state.cols.indexOf(column);
+  if (index === -1) {
+    toast(`${column} 열이 표에서 숨겨져 있습니다.`);
+    return;
+  }
+  const row = document.querySelector(`#table-scroll table.grid tbody tr[data-pos="${position}"]`);
+  const cell = row && row.children[index + 1];
+  if (!cell) return;
+  document.querySelectorAll('td.cell-flash').forEach((old) => old.classList.remove('cell-flash'));
+  cell.scrollIntoView({ block: 'center' });
+  cell.classList.add('cell-flash');
+  setTimeout(() => cell.classList.remove('cell-flash'), 2400);
+}
+
 function factGroups(meta) {
   const missing = meta.columns.filter((column) => column.missing > 0);
   const outlier = meta.columns.filter((column) => column.outliers > 0);
   const typed = meta.columns.filter((column) => column.numericLike);
   return [
     {
-      key: 'missing', label: '결측값', count: missing.length,
+      key: 'missing', label: '결측치 확인',
       note: '값이 비어 있는 칸입니다. 평균이나 중앙값으로 채울 수도, 그 행을 빼고 분석할 수도 있습니다. 어느 쪽을 고르느냐에 따라 결과가 달라지니, 왜 비어 있는지부터 생각해 보세요.',
       rows: missing.map((column) => ({
         label: column.name,
@@ -1425,8 +1493,8 @@ function factGroups(meta) {
       })),
     },
     {
-      key: 'outlier', label: '이상치', count: outlier.length,
-      note: '사분위수 범위(IQR)에서 크게 벗어난 값입니다. 잘못 입력된 값일 수도 있고, 실제로 특별한 경우일 수도 있습니다. 지우기 전에 어떤 행인지 반드시 확인하세요.',
+      key: 'outlier', label: '이상치 확인',
+      note: '값을 작은 것부터 늘어놓고 넷으로 나눌 때, 아래에서 1/4 지점을 Q1, 3/4 지점을 Q3라 하고 그 사이 폭을 사분위수 범위(IQR)라고 합니다. 가운데 절반이 퍼져 있는 폭입니다. 여기서는 Q1보다 IQR의 1.5배 아래이거나 Q3보다 1.5배 위인 값을 이상치로 봅니다. 잘못 입력된 값일 수도, 실제로 특별한 경우일 수도 있으니 지우기 전에 어떤 행인지 확인하세요.',
       rows: outlier.map((column) => ({
         label: column.name,
         amount: `${numberFormat.format(column.outliers)}개`,
@@ -1434,12 +1502,12 @@ function factGroups(meta) {
       })),
     },
     {
-      key: 'type', label: '자료형 확인', count: typed.length,
+      key: 'type', label: '자료형 확인',
       note: '숫자처럼 보이는데 문자로 읽힌 열입니다. 이대로 두면 평균을 내거나 그래프를 그릴 수 없습니다. 다만 학번·코드처럼 계산하지 않는 값이라면 문자로 두는 편이 맞습니다.',
       rows: typed.map((column) => ({ label: column.name, amount: '문자로 읽힘' })),
     },
     {
-      key: 'duplicated', label: '중복 행', count: meta.duplicated ? 1 : 0,
+      key: 'duplicated', label: '중복 행 확인',
       note: '모든 값이 똑같은 행입니다. 같은 자료가 두 번 들어갔을 수 있습니다.',
       rows: meta.duplicated
         ? [{ label: '표 전체', amount: `${numberFormat.format(meta.duplicated)}행` }]
@@ -1475,7 +1543,7 @@ function renderClean(body, meta) {
     body.append(el('div', 'section-label alert-label', `살펴볼 것 ${findings.length}`));
     findings.forEach((finding) => body.append(findingCard(meta, finding)));
   } else {
-    body.append(el('div', 'callout callout-ok', '결측값·이상치·중복 행이 보이지 않습니다.'));
+    body.append(el('div', 'callout callout-ok', '결측치·이상치·중복 행이 보이지 않습니다.'));
   }
 
   body.append(columnProfile(meta, true));
@@ -1531,7 +1599,7 @@ function findingCard(meta, finding) {
 
   if (finding.type === 'missing') {
     const column = finding.column;
-    head.append(el('span', 'finding-kind', '결측값'), el('span', 'finding-col', column.name));
+    head.append(el('span', 'finding-kind', '결측치'), el('span', 'finding-col', column.name));
     info.append(el('div', 'finding-fact',
       `${numberFormat.format(column.missing)}개 비어 있음 · 전체의 ${(column.missingRatio * 100).toFixed(1)}%`));
     info.append(miniBar(column.missingRatio));
@@ -1641,7 +1709,7 @@ function columnProfile(meta, withActions) {
   const picked = meta.columns.filter((column) => state.selCols.includes(column.name));
 
   box.append(el('div', 'section-label',
-    picked.length > 1 ? `열 프로필 ${picked.length}개` : '열 프로필'));
+    picked.length > 1 ? `열 프로필(${picked.length}개)` : '열 프로필'));
 
   if (!picked.length) {
     box.append(el('div', 'empty-note', '표에서 열 제목의 네모를 누르면 그 열을 자세히 보여줍니다. 여러 개를 고르면 나란히 비교합니다.'));
@@ -1704,9 +1772,11 @@ function profileCard(column) {
   const rows = [];
   if (column.kind === 'number') {
     rows.push(['평균', fmt(column.mean)], ['중앙값', fmt(column.median)],
-      ['표준편차', fmt(column.std)], ['최소 · 최대', `${fmt(column.min)} ~ ${fmt(column.max)}`]);
+      ['표준편차', fmt(column.std)], ['고유값', `${numberFormat.format(column.unique)}개`],
+      ['최소값', fmt(column.min)], ['최대값', fmt(column.max)]);
   }
-  rows.push(['결측', `${column.missing}개`], ['고유값', `${numberFormat.format(column.unique)}개`]);
+  rows.push(['결측', `${column.missing}개`]);
+  if (column.kind !== 'number') rows.push(['고유값', `${numberFormat.format(column.unique)}개`]);
   if (column.outliers) rows.push(['이상치', `${column.outliers}개`]);
   const list = el('div', 'profile-stats');
   rows.forEach(([label, value]) => {
@@ -1790,6 +1860,8 @@ async function addStep(step) {
 }
 
 async function rebuildAll() {
+  state.factCursor = {};
+  state.locateCache = {};
   const result = await run(kernel.rebuild(state.steps), '전처리 적용');
   state.tables = result.tables;
   state.problems = result.problems;
@@ -2393,7 +2465,17 @@ function readZoom() {
 function applyZoom(percent, remember = true) {
   const value = Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, percent)) / 5) * 5;
   state.zoom = value;
-  document.body.style.zoom = value === 100 ? '' : String(value / 100);
+  // 상단 바는 그대로 두고 아래 작업 영역만 키운다. 배율을 걸면 그 영역이 화면을 넘기므로
+  // 높이를 배율만큼 나눠 줘야 안쪽에서 스크롤된다.
+  const shell = document.querySelector('.shell');
+  if (shell) {
+    const ratio = value / 100;
+    const topbar = document.querySelector('.topbar');
+    const headHeight = topbar ? topbar.offsetHeight : 0;
+    shell.style.zoom = value === 100 ? '' : String(ratio);
+    shell.style.height = value === 100 ? '' : `calc((100vh - ${headHeight}px) / ${ratio})`;
+    shell.style.flex = value === 100 ? '' : '0 0 auto';
+  }
   const box = $('#zoom-value');
   if (box && document.activeElement !== box) box.value = String(value);
   $('#zoom-out').disabled = value <= ZOOM_MIN;
