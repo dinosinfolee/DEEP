@@ -152,9 +152,10 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .flag { border-radius: .25rem; padding: .05rem .3rem; font-size: .625rem; font-weight: 700; }
 .flag-missing { background: var(--danger-soft); color: var(--danger); }
 .flag-outlier { background: var(--warn-soft); color: var(--warn); }
-.column-menu-btn { flex: none; opacity: 0; border: 0; background: transparent; border-radius: .25rem; padding: .1rem; color: var(--ink-muted); cursor: pointer; }
+.column-menu-btn { display: inline-flex; align-items: center; justify-content: center; width: 1.75rem; height: 1.75rem; flex: none; opacity: 0; border: 0; background: transparent; border-radius: .4rem; color: var(--ink-muted); cursor: pointer; }
 .column-row:hover .column-menu-btn { opacity: 1; }
-.column-menu-btn svg { width: .85rem; height: .85rem; }
+.column-menu-btn svg { width: 1.1rem; height: 1.1rem; }
+.column-menu-btn:hover { background: var(--surface-sunken); color: var(--ink); }
 
 /* ---------------------------------------------------------------- 탭 */
 .tabs { display: flex; align-items: center; gap: .15rem; height: var(--head-h); flex: none; padding: 0 1rem; background: var(--surface); border-bottom: 1px solid var(--line); }
@@ -503,11 +504,11 @@ table.grid td.cell-flash { animation: cellFlash 2.4s ease-out forwards; }
 
 .column-eye {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 1.3rem; height: 1.3rem; flex: none;
-  border: 0; border-radius: .3rem; background: transparent;
-  color: var(--ink-muted); cursor: pointer;
+  width: 1.75rem; height: 1.75rem; flex: none;
+  border: 0; border-radius: .4rem; background: transparent;
+  color: var(--ink-soft); cursor: pointer;
 }
-.column-eye svg { width: .85rem; height: .85rem; }
+.column-eye svg { width: 1.1rem; height: 1.1rem; stroke-width: 1.8; }
 .column-eye:hover { background: var(--surface-sunken); color: var(--ink); }
 .column-row.column-hidden .column-name,
 .column-row.column-hidden .kind-tag { opacity: .4; }
@@ -518,7 +519,13 @@ table.grid td.cell-flash { animation: cellFlash 2.4s ease-out forwards; }
 }
 .fact-section { padding: .7rem .8rem; }
 .fact-section + .fact-section { border-top: 1px solid var(--line); }
-.fact-section-head { display: flex; align-items: center; gap: .5rem; }
+.fact-section-head {
+  display: flex; align-items: center; gap: .45rem; width: 100%;
+  border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left;
+}
+.fact-caret { display: inline-flex; flex: none; color: var(--ink-muted); transition: transform .12s ease; }
+.fact-caret svg { width: .9rem; height: .9rem; }
+.fact-section.open .fact-caret { transform: rotate(90deg); }
 .fact-section-title { font-size: .8125rem; font-weight: 700; color: var(--ink); }
 .fact-section-count {
   margin-left: auto; font-size: .71875rem; font-weight: 700; color: var(--warn);

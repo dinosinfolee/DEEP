@@ -36,6 +36,7 @@ const state = {
   kinds: [],
   visIdx: [],
   hiddenCols: [],
+  openFacts: [],
   factCursor: {},
   locateCache: {},
   page: 0,
@@ -1474,14 +1475,26 @@ function tableSummary(meta) {
 function factSections(meta) {
   const wrap = el('div', 'fact-sections');
   factGroups(meta).forEach((group) => {
-    const section = el('div', 'fact-section');
-    const head = el('div', 'fact-section-head');
-    head.append(el('span', 'fact-section-title', group.label));
+    const open = state.openFacts.includes(group.key);
+    const section = el('div', `fact-section${open ? ' open' : ''}`);
+    const head = el('button', 'fact-section-head');
+    head.type = 'button';
+    const caret = el('span', 'fact-caret');
+    caret.innerHTML = icon('<path d="M9 6l6 6-6 6"/>');
+    head.append(caret, el('span', 'fact-section-title', group.label));
     head.append(el('span', group.rows.length ? 'fact-section-count' : 'fact-section-count ok',
       group.rows.length ? String(group.rows.length) : '없음'));
+    head.onclick = () => {
+      state.openFacts = open
+        ? state.openFacts.filter((key) => key !== group.key)
+        : [...state.openFacts, group.key];
+      renderInspector();
+    };
     section.append(head);
-    if (group.note) section.append(el('div', 'fact-note', group.note));
-    group.rows.forEach((row) => section.append(factRow(meta, row)));
+    if (open) {
+      if (group.note) section.append(el('div', 'fact-note', group.note));
+      group.rows.forEach((row) => section.append(factRow(meta, row)));
+    }
     wrap.append(section);
   });
   return wrap;
