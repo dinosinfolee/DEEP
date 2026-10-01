@@ -67,7 +67,7 @@ function baseLayout(options = {}) {
     },
     hoverlabel: {
       bgcolor: '#ffffff',
-      bordercolor: '#dededb',
+      bordercolor: AXIS,
       font: { family: FONT, size: 12.5, color: INK, weight: 400 },
     },
     xaxis: axis(options.xTitle, options.xType),
@@ -117,6 +117,8 @@ export function buildFigure(data, spec) {
       return pieFigure(data, spec);
     case 'heatmap':
       return heatmapFigure(data, spec);
+    case 'map':
+      return mapFigure(data, spec);
     default:
       throw new Error(`그릴 수 없는 그래프: ${data.kind}`);
   }
@@ -133,7 +135,7 @@ function barFigure(data, spec) {
       color: color(index),
       line: { width: data.series.length > 1 ? 1 : 0, color: SURFACE },
     },
-    hovertemplate: `%{${spec.horizontal ? 'y' : 'x'}}<br><b>%{${spec.horizontal ? 'x' : 'y'}:,.4~g}</b><extra>${series.name}</extra>`,
+    hovertemplate: `%{${spec.horizontal ? 'y' : 'x'}}<br><b>%{${spec.horizontal ? 'x' : 'y'}:~f}</b><extra>${series.name}</extra>`,
   }));
   const layout = baseLayout({
     showLegend: traces.length > 1,
@@ -154,7 +156,7 @@ function lineFigure(data, spec) {
     y: series.y,
     line: { width: 2, color: color(index), shape: spec.smooth ? 'spline' : 'linear' },
     marker: { size: 6, color: color(index), line: { width: 1.5, color: SURFACE } },
-    hovertemplate: `%{x}<br><b>%{y:,.4~g}</b><extra>${series.name}</extra>`,
+    hovertemplate: `%{x}<br><b>%{y:~f}</b><extra>${series.name}</extra>`,
   }));
   return {
     traces,
@@ -183,7 +185,7 @@ function scatterFigure(data, spec) {
         opacity: 0.78,
         line: { width: 1, color: SURFACE },
       },
-      hovertemplate: `${spec.x}: %{x:,.4~g}<br>${spec.y}: %{y:,.4~g}<extra>${series.name}</extra>`,
+      hovertemplate: `${spec.x}: %{x:~f}<br>${spec.y}: %{y:~f}<extra>${series.name}</extra>`,
     };
   });
   if (data.trend) {
@@ -205,6 +207,37 @@ function scatterFigure(data, spec) {
       yTitle: spec.y,
     }),
   };
+}
+
+/* 지도. 바탕 타일은 바깥에서 받아 오므로 학교망에서 막히면 점만 보인다.
+   그래도 좌표는 그대로 찍히니 분포는 읽을 수 있다. */
+function mapFigure(data, spec) {
+  const traces = data.series.map((series, index) => ({
+    type: 'scattermap',
+    mode: 'markers',
+    name: series.name,
+    lat: series.lat,
+    lon: series.lon,
+    text: series.text || undefined,
+    hovertemplate: series.text
+      ? '%{text}<br>%{lat:~f}, %{lon:~f}<extra></extra>'
+      : '%{lat:~f}, %{lon:~f}<extra></extra>',
+    marker: {
+      color: color(index),
+      size: series.size ? scaleSizes(series.size) : 8,
+      opacity: 0.85,
+    },
+  }));
+
+  // 점이 퍼진 만큼만 당긴다. 한 점뿐이면 과하게 확대되지 않도록 막아 둔다.
+  const span = Math.max(data.span.lat, data.span.lon, 0.05);
+  const zoom = Math.min(13, Math.max(3, Math.log2(360 / span) - 1));
+  const layout = baseLayout({ showLegend: data.series.length > 1 });
+  delete layout.xaxis;
+  delete layout.yaxis;
+  layout.map = { style: spec.style || 'carto-positron', center: data.center, zoom };
+  layout.margin = { l: 6, r: 6, t: 10, b: data.series.length > 1 ? 40 : 6 };
+  return { traces, layout };
 }
 
 function scaleSizes(values) {
@@ -248,7 +281,7 @@ function boxFigure(data, spec) {
     marker: { color: color(index), size: 5, outliercolor: '#e34948' },
     line: { width: 1.6 },
     fillcolor: color(index) + '22',
-    hovertemplate: '%{y:,.4~g}<extra>%{x}</extra>',
+    hovertemplate: '%{y:~f}<extra>%{x}</extra>',
   }));
   return {
     traces,
@@ -273,7 +306,7 @@ function pieFigure(data) {
         textinfo: 'label+percent',
         textposition: 'outside',
         textfont: { size: 11, color: INK_SOFT },
-        hovertemplate: '%{label}<br><b>%{value:,.4~g}</b> (%{percent})<extra></extra>',
+        hovertemplate: '%{label}<br><b>%{value:~f}</b> (%{percent})<extra></extra>',
       },
     ],
     layout: baseLayout({ showLegend: false, extra: { margin: { l: 20, r: 20, t: 20, b: 20 } } }),
@@ -331,7 +364,7 @@ export function actualVsPredicted(result) {
         x: result.scatter.actual,
         y: result.scatter.predicted,
         marker: { color: SERIES[0], size: 9, opacity: 0.8, line: { width: 1, color: SURFACE } },
-        hovertemplate: '실제 %{x:,.4~g}<br>예측 %{y:,.4~g}<extra></extra>',
+        hovertemplate: '실제 %{x:~f}<br>예측 %{y:~f}<extra></extra>',
       },
     ],
     layout: baseLayout({ showLegend: true, xTitle: '실제값', yTitle: '예측값' }),
@@ -348,7 +381,7 @@ export function residualFigure(result) {
         x: result.residual.fitted,
         y: result.residual.residual,
         marker: { color: SERIES[1], size: 8, opacity: 0.75, line: { width: 1, color: SURFACE } },
-        hovertemplate: '예측 %{x:,.4~g}<br>잔차 %{y:,.4~g}<extra></extra>',
+        hovertemplate: '예측 %{x:~f}<br>잔차 %{y:~f}<extra></extra>',
       },
     ],
     layout: baseLayout({
@@ -382,7 +415,7 @@ export function simpleRegressionFigure(result) {
         x: simple.x,
         y: simple.y,
         marker: { color: SERIES[0], size: 9, opacity: 0.75, line: { width: 1, color: SURFACE } },
-        hovertemplate: `${simple.xName} %{x:,.4~g}<br>${result.target} %{y:,.4~g}<extra></extra>`,
+        hovertemplate: `${simple.xName} %{x:~f}<br>${result.target} %{y:~f}<extra></extra>`,
       },
       {
         type: 'scatter',
@@ -406,7 +439,7 @@ export function clusterFigure(result) {
     x: group.x,
     y: group.y,
     marker: { color: color(index), size: 9, opacity: 0.8, line: { width: 1, color: SURFACE } },
-    hovertemplate: '%{x:,.3~g}, %{y:,.3~g}<extra>' + group.name + '</extra>',
+    hovertemplate: '%{x:~f}, %{y:~f}<extra>' + group.name + '</extra>',
   }));
   return {
     traces,
@@ -429,7 +462,7 @@ export function elbowFigure(result) {
         y: result.elbow.map((item) => item.inertia),
         line: { width: 2, color: SERIES[0] },
         marker: { size: 8, color: SERIES[0], line: { width: 1.5, color: SURFACE } },
-        hovertemplate: 'k=%{x}<br><b>%{y:,.4~g}</b><extra></extra>',
+        hovertemplate: 'k=%{x}<br><b>%{y:~f}</b><extra></extra>',
       },
     ],
     layout: baseLayout({ xTitle: '군집 수 k', yTitle: '군집 내 거리 합' }),
@@ -464,7 +497,7 @@ export function importanceFigure(items, title) {
         x: rows.map((item) => item.value),
         y: rows.map((item) => item.name),
         marker: { color: SERIES[0] },
-        hovertemplate: '%{y}<br><b>%{x:,.4~g}</b><extra></extra>',
+        hovertemplate: '%{y}<br><b>%{x:~f}</b><extra></extra>',
       },
     ],
     layout: baseLayout({ xTitle: title, extra: { bargap: 0.35, margin: { l: 130, r: 20, t: 16, b: 44 } } }),
@@ -519,7 +552,17 @@ export function confusionFigure(result) {
 const observed = new WeakSet();
 
 export function draw(element, figure) {
-  const drawing = Plotly.react(element, figure.traces, figure.layout, CONFIG);
+  // 지도는 바탕 타일을 받는 동안 다시 그리면 'Style is not done loading'으로 거절된다.
+  // 잠시 뒤 한 번 더 그려 주면 그 사이 바탕이 준비된다.
+  const drawing = Plotly.react(element, figure.traces, figure.layout, CONFIG).catch((error) => {
+    const message = String((error && error.message) || error);
+    if (!message.includes('Style is not done loading')) throw error;
+    return new Promise((resolve) => setTimeout(resolve, 700))
+      .then(() => (element.isConnected
+        ? Plotly.react(element, figure.traces, figure.layout, CONFIG)
+        : undefined))
+      .catch(() => {});
+  });
   if (!observed.has(element) && typeof ResizeObserver !== 'undefined') {
     observed.add(element);
     let timer = null;

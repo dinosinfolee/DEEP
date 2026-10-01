@@ -4,7 +4,7 @@
    한 번 받은 것을 여기서 붙잡아 두면 그 다음 수업부터는 네트워크를 거의 쓰지 않는다.
    브라우저 캐시와 달리 용량 압박으로 먼저 버려지지 않고, 인터넷이 끊겨도 열린다. */
 
-const VERSION = 'deep-v1';
+const VERSION = 'deep-v2';
 const SHELL = `${VERSION}-shell`;   // 우리가 고치는 파일: 새 것이 있으면 조용히 갱신
 const HEAVY = `${VERSION}-heavy`;   // 버전이 박힌 라이브러리: 한 번 받으면 그대로
 
@@ -19,7 +19,7 @@ const SHELL_FILES = [
   './assets/store.js',
   './assets/worker.js',
   './assets/kernel.py',
-  './vendor/plotly-cartesian.min.js',
+  './vendor/plotly.min.js',
   './vendor/plotly-locale-ko.js',
 ];
 

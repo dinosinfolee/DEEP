@@ -764,6 +764,62 @@ def cmd_chart_data(payload):
             )
         return {"kind": kind, "series": series, "yTitle": label_for(y, how)}
 
+    if kind == "map":
+        lat_column = payload.get("lat")
+        lon_column = payload.get("lon")
+        if not lat_column or not lon_column:
+            raise KernelError("위도와 경도 열을 고르세요.")
+        for column in (lat_column, lon_column, payload.get("label")):
+            if column and column not in frame.columns:
+                raise KernelError(f"'{column}' 열이 표에 없습니다.")
+        label = payload.get("label") or None
+        size_column = payload.get("size") or None
+        wanted = [lat_column, lon_column] + [c for c in (color, label, size_column) if c]
+        subset = frame[list(dict.fromkeys(wanted))].copy()
+        subset[lat_column] = pd.to_numeric(subset[lat_column], errors="coerce")
+        subset[lon_column] = pd.to_numeric(subset[lon_column], errors="coerce")
+        subset = subset.dropna(subset=[lat_column, lon_column])
+        # 위도 -90~90, 경도 -180~180 밖이면 좌표가 아니다.
+        subset = subset[
+            subset[lat_column].between(-90, 90) & subset[lon_column].between(-180, 180)
+        ]
+        if not len(subset):
+            raise KernelError("지도에 찍을 좌표가 없습니다. 위도·경도 열이 맞는지 확인하세요.")
+        limit = int(payload.get("limit", 3000))
+        if len(subset) > limit:
+            subset = subset.sample(limit, random_state=42)
+
+        def one(name, part):
+            return {
+                "name": str(name),
+                "lat": native(part[lat_column].tolist()),
+                "lon": native(part[lon_column].tolist()),
+                "text": [str(v) for v in part[label].tolist()] if label else None,
+                "size": native(pd.to_numeric(part[size_column], errors="coerce").tolist())
+                if size_column
+                else None,
+            }
+
+        series = []
+        if color:
+            for key, part in subset.groupby(category_values(subset[color]), dropna=False):
+                series.append(one(key, part))
+        else:
+            series.append(one(f"{lat_column} · {lon_column}", subset))
+        return {
+            "kind": "map",
+            "series": series,
+            "center": {
+                "lat": float(subset[lat_column].mean()),
+                "lon": float(subset[lon_column].mean()),
+            },
+            "span": {
+                "lat": float(subset[lat_column].max() - subset[lat_column].min()),
+                "lon": float(subset[lon_column].max() - subset[lon_column].min()),
+            },
+            "count": int(len(subset)),
+        }
+
     if kind == "scatter":
         columns = [x, y] + [c for c in (color, payload.get("size")) if c]
         subset = frame[list(dict.fromkeys(columns))].copy()

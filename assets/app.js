@@ -755,6 +755,27 @@ const CHART_KINDS = {
       { key: 'agg', type: 'select', label: '요약', options: () => AGG_OPTIONS },
     ],
   },
+  map: {
+    label: '지도',
+    fields: [
+      { key: 'table', type: 'table', label: '표' },
+      { key: 'lat', type: 'column', kinds: NUM, label: '위도' },
+      { key: 'lon', type: 'column', kinds: NUM, label: '경도' },
+      { key: 'color', type: 'column', label: '색 구분', optional: true },
+      { key: 'label', type: 'column', label: '점 이름', optional: true },
+      { key: 'size', type: 'column', kinds: NUM, label: '점 크기', optional: true },
+      {
+        key: 'style', type: 'select', label: '바탕',
+        options: () => [
+          ['carto-positron', '밝은 지도'],
+          ['open-street-map', 'OpenStreetMap'],
+          ['carto-darkmatter', '어두운 지도'],
+          ['white-bg', '바탕 없음'],
+        ],
+      },
+    ],
+    title: (spec) => `지도 · ${spec.lat} / ${spec.lon}`,
+  },
   heatmap: {
     label: '상관 히트맵',
     fields: [
@@ -1975,6 +1996,13 @@ function chartDefaults(kind, table) {
       return { y: numbers[0]?.name, x: groups[0]?.name || '' };
     case 'heatmap':
       return { columns: numbers.slice(0, 8).map((column) => column.name) };
+    case 'map': {
+      const pick = (words) => numbers.find((column) => words.some((word) => column.name.includes(word)));
+      const lat = pick(['위도', 'lat', 'LAT', 'Lat', 'y좌표']) || numbers[0];
+      const lon = pick(['경도', 'lon', 'lng', 'LON', 'Lon', 'x좌표']) || numbers[1] || numbers[0];
+      const name = meta.columns.find((column) => column.kind === 'text' && column.unique > 5);
+      return { lat: lat?.name, lon: lon?.name, label: name?.name || '', style: 'carto-positron' };
+    }
     default:
       return {};
   }
