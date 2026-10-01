@@ -276,6 +276,77 @@ function columnChips(values, field, input, onChange) {
   return box;
 }
 
+function customSelect(options, value, onPick) {
+  const button = el('button', 'select-btn');
+  button.type = 'button';
+  const label = el('span', 'select-label');
+  const caret = el('span', 'select-caret');
+  caret.innerHTML = icon('<path d="M6 9l6 6 6-6"/>');
+  button.append(label, caret);
+
+  const paint = (next) => {
+    const hit = options.find(([option]) => option === next);
+    label.textContent = hit ? hit[1] : '(없음)';
+    button.classList.toggle('empty', !hit);
+  };
+  paint(value);
+
+  button.onclick = (event) => {
+    event.stopPropagation();
+    openSelectList(button, options, value, (next) => {
+      value = next;
+      paint(next);
+      onPick(next);
+    });
+  };
+  return button;
+}
+
+function openSelectList(anchor, options, current, onPick) {
+  document.querySelectorAll('.menu, .select-pop, .rename-pop').forEach((node) => node.remove());
+  const pop = el('div', 'select-pop');
+  if (!options.length) pop.append(el('div', 'select-empty', '고를 수 있는 것이 없습니다.'));
+  options.forEach(([option, text]) => {
+    const item = el('button', `select-item${option === current ? ' on' : ''}`);
+    item.type = 'button';
+    item.append(el('span', 'select-item-text', text));
+    if (option === current) {
+      const check = el('span', 'select-check');
+      check.innerHTML = icon('<path d="M5 13l4 4L19 7"/>');
+      item.append(check);
+    }
+    item.onclick = () => {
+      close();
+      onPick(option);
+    };
+    pop.append(item);
+  });
+  document.body.append(pop);
+
+  const box = anchor.getBoundingClientRect();
+  pop.style.minWidth = `${Math.max(box.width, 9)}px`;
+  pop.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - pop.offsetWidth - 12))}px`;
+  const room = window.innerHeight - box.bottom;
+  // 아래 자리가 모자라고 위가 더 넓으면 위로 펼친다.
+  pop.style.top = pop.offsetHeight + 8 > room && box.top > room
+    ? `${Math.max(8, box.top - pop.offsetHeight - 4)}px`
+    : `${box.bottom + 4}px`;
+  const chosen = pop.querySelector('.select-item.on');
+  if (chosen) chosen.scrollIntoView({ block: 'nearest' });
+
+  function close() {
+    pop.remove();
+    document.removeEventListener('mousedown', outside);
+    document.removeEventListener('keydown', onKey);
+  }
+  function outside(event) { if (!pop.contains(event.target)) close(); }
+  function onKey(event) { if (event.key === 'Escape') close(); }
+  setTimeout(() => {
+    document.addEventListener('mousedown', outside);
+    document.addEventListener('keydown', onKey);
+  }, 0);
+}
+
 function buildFields(container, fields, values, onChange) {
   container.innerHTML = '';
   const rerender = () => buildFields(container, fields, values, onChange);
@@ -298,7 +369,6 @@ function buildFields(container, fields, values, onChange) {
       case 'table':
       case 'column':
       case 'select': {
-        input = el('select');
         let options = [];
         if (field.type === 'table') options = state.tables.map((table) => [table.name, table.name]);
         else if (field.type === 'column') {
@@ -308,16 +378,13 @@ function buildFields(container, fields, values, onChange) {
             .map((column) => [column.name, column.name]);
         } else options = field.options(values);
         if (field.optional) options = [['', '(없음)']].concat(options);
-        options.forEach(([value, text]) => {
-          const option = el('option', null, text);
-          option.value = value;
-          input.append(option);
-        });
-        if (!options.some(([value]) => value === values[field.key])) {
+        if (!options.some(([option]) => option === values[field.key])) {
           values[field.key] = options.length ? options[0][0] : '';
         }
-        input.value = values[field.key] ?? '';
-        input.onchange = () => { values[field.key] = input.value; emit(); };
+        input = customSelect(options, values[field.key] ?? '', (next) => {
+          values[field.key] = next;
+          emit();
+        });
         break;
       }
       case 'columns': {
@@ -1546,22 +1613,27 @@ function renderClean(body, meta) {
     body.append(el('div', 'callout callout-ok', '결측치·이상치·중복 행이 보이지 않습니다.'));
   }
 
-  body.append(columnProfile(meta, true));
+  // 열을 고르지 않았으면 프로필 자리를 비워 둔다. 빈 안내까지 쌓이면 번잡하다.
+  if (state.selCols.length) body.append(columnProfile(meta, true));
 
-  body.append(el('div', 'section-label', '표 전체에 하는 일'));
-  const grid = el('div', 'op-grid');
-  ['filter_rows', 'new_column', 'group', 'concat', 'merge', 'kmeans_label'].forEach((op) => {
-    const schema = STEP_SCHEMAS[op];
-    const button = el('button', 'op-btn');
-    button.type = 'button';
-    button.textContent = schema.label;
-    const needsPick = schema.needs && schema.needs !== 'optional';
-    button.disabled = Boolean(needsPick) && !state.selCols.length;
-    button.title = button.disabled ? '표에서 열을 먼저 고르세요' : '';
-    button.onclick = () => openStepDialog(op, {});
-    grid.append(button);
-  });
-  body.append(grid);
+  const more = el('button', 'more-btn');
+  more.type = 'button';
+  more.append(el('span', null, '다른 작업'));
+  const caret = el('span', 'select-caret');
+  caret.innerHTML = icon('<path d="M6 9l6 6 6-6"/>');
+  more.append(caret);
+  more.onclick = () => {
+    openMenu(more, ['filter_rows', 'new_column', 'group', 'concat', 'merge', 'kmeans_label'].map((op) => {
+      const schema = STEP_SCHEMAS[op];
+      const needsPick = schema.needs && schema.needs !== 'optional';
+      const blocked = Boolean(needsPick) && !state.selCols.length;
+      return {
+        label: blocked ? `${schema.label} — 열을 먼저 고르세요` : schema.label,
+        run: () => { if (!blocked) openStepDialog(op, {}); },
+      };
+    }));
+  };
+  body.append(more);
 }
 
 /* 표 메타만 보고 문제를 찾는다. 커널을 다시 부르지 않는다. */

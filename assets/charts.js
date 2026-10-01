@@ -11,11 +11,11 @@ export const SERIES = [
   '#e34948', // 빨강
 ];
 
-const INK = '#37352f';
-const INK_SOFT = '#5e646e';
-const MUTED = '#75736e';
-const GRID = '#d4d4cf';
-const AXIS = '#c9c9c5';
+const INK = '#111827';
+const INK_SOFT = '#4b5563';
+const MUTED = '#6b7280';
+const GRID = '#eceef1';
+const AXIS = '#d1d5db';
 const SURFACE = '#ffffff';
 const FONT = '"Pretendard Variable", Pretendard, "Noto Sans KR", system-ui, sans-serif';
 
@@ -52,23 +52,23 @@ function baseLayout(options = {}) {
   return {
     paper_bgcolor: SURFACE,
     plot_bgcolor: SURFACE,
-    font: { family: FONT, size: 12, color: INK_SOFT },
+    font: { family: FONT, size: 12.5, color: INK_SOFT, weight: 400 },
     margin: { l: 58, r: 18, t: options.title ? 44 : 16, b: 52 },
     title: options.title
-      ? { text: options.title, font: { size: 14, color: INK }, x: 0, xanchor: 'left', y: 0.97 }
+      ? { text: options.title, font: { size: 14, color: INK, weight: 600 }, x: 0, xanchor: 'left', y: 0.97 }
       : undefined,
     showlegend: showLegend,
     legend: {
       orientation: 'h',
       y: -0.18,
       x: 0,
-      font: { size: 11, color: INK_SOFT },
+      font: { size: 12, color: INK_SOFT, weight: 400 },
       bgcolor: 'rgba(0,0,0,0)',
     },
     hoverlabel: {
       bgcolor: '#ffffff',
       bordercolor: '#dededb',
-      font: { family: FONT, size: 12, color: INK },
+      font: { family: FONT, size: 12.5, color: INK, weight: 400 },
     },
     xaxis: axis(options.xTitle, options.xType),
     yaxis: axis(options.yTitle, options.yType),
@@ -77,13 +77,21 @@ function baseLayout(options = {}) {
 }
 
 function axis(title, type) {
+  // 날짜·범주 축이 아니면 숫자를 지수(1.201e+4)로 줄이지 않고 그대로 쓴다.
+  const plain = type !== 'date' && type !== 'category';
   return {
-    title: title ? { text: title, font: { size: 11, color: MUTED }, standoff: 12 } : undefined,
+    tickformat: plain ? '~f' : undefined,
+    hoverformat: plain ? '~f' : undefined,
+    separatethousands: false,
+    title: title ? { text: title, font: { size: 12, color: INK_SOFT, weight: 600 }, standoff: 14 } : undefined,
     type: type || undefined,
     gridcolor: GRID,
+    gridwidth: 1,
     zerolinecolor: AXIS,
     linecolor: AXIS,
-    tickfont: { size: 11, color: MUTED },
+    // 교실 화면에서 읽히도록 눈금 글씨를 키운다. 굵기는 400으로 못박아 둔다.
+    tickfont: { size: 12, color: MUTED, weight: 400 },
+    ticklabelposition: 'outside',
     automargin: true,
   };
 }
